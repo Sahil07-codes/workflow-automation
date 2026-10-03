@@ -1,0 +1,72 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.autoapply.app
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Run all tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+        run: npm run test && npm run test:e2e
+
+      - name: Build Docker image (production)
+        run: |
+          docker build \
+            -t autoapply-api:${{ github.event.inputs.version }} \
+            -f apps/api/Dockerfile .
+
+      - name: Security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: autoapply-api:${{ github.event.inputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      # Production deployment would go here (blue/green, rolling, etc.)
+      # with health checks and automatic rollback
+
+      - name: Create release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release ${{ github.event.inputs.version }}
+          body: 'See CHANGELOG.md for details'
+
+      - name: Notify team
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          text: 'Production deployment v${{ github.event.inputs.version }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ IDENTITY (Phase 0-1) ============
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique @db.Citext
+  phone_e164        String   @unique
+  password_hash     String?
+  email_verified_at DateTime?
+  phone_verified_at DateTime?
+  role              String   @default("USER")
+  status            String   @default("PENDING")
+  referral_code     String   @unique
+  referred_by       String?
+  consent_version   String
+  consent_at        DateTime
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("users")
+}
+
+model OtpChallenge {
+  id          String    @id @default(uuid())
+  target      String
+  channel     String
+  code_hash   String
+  attempts    Int       @default(0)
+  expires_at  DateTime
+  consumed_at DateTime?
+  ip          String?
+  created_at  DateTime  @default(now())
+
+  @@index([target, created_at])
+  @@map("otp_challenges")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  user_id   String
+  family_id String
+  token_hash String  @unique
+  used_at   DateTime?
+  revoked_at DateTime?
+  expires_at DateTime
+  user_agent String?
+  ip        String?
+  created_at DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+// ============ PROFILE (Phase 2) ============
+model Profile {
+  user_id         String
+  data_enc        Bytes
+  dek_wrapped     Bytes
+  current_version Int     @default(1)
+  confirmed_at    DateTime?
+  updated_at      DateTime @updatedAt
+
+  @@id([user_id])
+  @@map("profiles")
+}
+
+model ProfileVersion {
+  user_id   String
+  version   Int
+  data_enc  Bytes
+  created_at DateTime @default(now())
+
+  @@id([user_id, version])
+  @@map("profile_versions")
+}
+
+model JobPreference {
+  user_id        String   @id
+  roles          String[]
+  locations      String[]
+  remote_pref    String?
+  min_salary_inr Int?
+  excluded_cos   String[] @default([])
+  min_match_score Int     @default(60)
+  daily_cap      Int      @default(25)
+  auto_approve   Json?
+  updated_at     DateTime @updatedAt
+
+  @@map("job_preferences")
+}
+
+model AnswerBank {
+  id              String   @id @default(uuid())
+  user_id         String
+  question_hash   String
+  question_text   String
+  answer_enc      Bytes
+  embedding       Bytes?
+  created_at      DateTime @default(now())
+
+  @@unique([user_id, question_hash])
+  @@map("answer_bank")
+}
+
+// ============ BILLING MODELS (Phase 3) ============
+model Plan {
+  id               String   @id
+  name             String
+  razorpay_plan_id String?
+  price_paise      Int
+  monthly_quota    Int
+  daily_cap        Int
+  features         Json?
+  active           Boolean  @default(true)
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                String    @id @default(uuid())
+  user_id           String
+  plan_id           String
+  razorpay_sub_id   String?   @unique
+  status            String
+  current_period_end DateTime?
+  grace_until       DateTime?
+  cancel_at_period_end Boolean @default(false)
+  updated_at        DateTime  @updatedAt
+
+  @@index([user_id])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id                  String   @id @default(uuid())
+  user_id             String
+  subscription_id     String?
+  razorpay_payment_id String   @unique
+  amount_paise        Int
+  currency            String   @default("INR")
+  status              String
+  method              String?
+  failure_reason      String?
+  created_at          DateTime @default(now())
+
+  @@map("payments")
+}
+
+model Invoice {
+  id            String   @id @default(uuid())
+  payment_id    String?
+  invoice_no    String   @unique
+  gstin         String?
+  taxable_paise Int?
+  gst_paise     Int?
+  pdf_key       String?
+  created_at    DateTime @default(now())
+
+  @@map("invoices")
+}
+
+model WebhookEvent {
+  id                String    @id @default(uuid())
+  provider          String
+  provider_event_id String
+  type              String
+  payload           Json
+  status            String    @default("RECEIVED")
+  received_at       DateTime  @default(now())
+  processed_at      DateTime?
+
+  @@unique([provider, provider_event_id])
+  @@map("webhook_events")
+}
+
+// ============ END BILLING MODELS ============

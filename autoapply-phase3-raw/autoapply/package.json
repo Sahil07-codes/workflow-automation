@@ -1,0 +1,28 @@
+{
+  "name": "autoapply",
+  "version": "0.1.0",
+  "description": "India's first AI-powered job application automation platform",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm run -r --parallel dev",
+    "build": "pnpm run -r build",
+    "test": "pnpm run -r test",
+    "test:watch": "pnpm run -r test:watch",
+    "test:cov": "pnpm run -r test:cov",
+    "test:e2e": "cd apps/api && jest --config ./test/jest-e2e.json",
+    "lint": "pnpm run -r lint",
+    "type-check": "pnpm run -r type-check",
+    "migrate": "cd apps/api && prisma migrate deploy",
+    "db:reset": "cd apps/api && prisma migrate reset",
+    "db:studio": "cd apps/api && prisma studio",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@autoapply/crypto",
+  "version": "0.1.0",
+  "description": "Envelope encryption and cryptographic utilities for AutoApply",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "@aws-sdk/client-kms": "^3.445.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.10.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3"
+  }
+}

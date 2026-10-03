@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: autoapply
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: autoapply
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Setup database
+        env:
+          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+        run: npm run migrate
+
+      - name: Run unit tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+          REDIS_URL: redis://localhost:6379
+        run: npm run test
+
+      - name: Run test coverage
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+        run: npm run test:cov
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+
+      - name: Security audit
+        run: npm audit --audit-level=moderate

@@ -1,0 +1,17 @@
+dist/
+node_modules/
+*.env
+.env.test
+.env.local
+.env.*.local
+.prisma/
+prisma/dev.db
+prisma/dev.db-journal
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+coverage/
+.nyc_output/

@@ -1,0 +1,77 @@
+// This file shows the Phase 4 ADDITIONS ONLY (marked block)
+// The existing schema from Phase 0-3 should remain unchanged
+// Only add the marked block below to your existing schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Assume existing models from Phase 0-3 are above this line:
+// - users, otp_challenges, refresh_tokens
+// - profiles, profile_versions, job_preferences, answer_bank
+// - applications, application_events, approval_tokens
+// - connected_accounts (optional T3/T4)
+// - plans, subscriptions, payments, invoices, webhook_events
+// - referrals, credit_ledger
+// - notifications, admin_audit_log
+
+// ============ JOB DISCOVERY MODELS (Phase 4) — do not edit outside this block ============
+
+model Job {
+  id            String   @id @default(uuid())
+  source        String
+  externalId    String   @map("external_id")
+  atsType       String?  @map("ats_type")
+  applyUrl      String   @map("apply_url")
+  canonicalUrl  String   @map("canonical_url")
+  company       String
+  title         String
+  location      String?
+  salaryMin     Int?     @map("salary_min")
+  salaryMax     Int?     @map("salary_max")
+  employmentType String?  @map("employment_type") // FULL_TIME, PART_TIME, CONTRACT, INTERNSHIP
+  jdText        String?  @map("jd_text")
+  contentHash   String   @map("content_hash")
+  embedding     Unsupported("vector(1024)")? // pgvector: computed by embedding service
+  status        String   @default("OPEN") // OPEN, CLOSED
+  firstSeen     DateTime @default(now()) @map("first_seen")
+  lastSeen      DateTime @default(now()) @map("last_seen")
+  rawData       Json?    @map("raw_data") // ATS-specific payload for debugging
+
+  // Relations
+  jobMatches    JobMatch[]
+
+  @@map("jobs")
+  @@unique([source, externalId])
+  @@index([canonicalUrl])
+  @@index([company, title, location])
+  @@index([status])
+  @@index([lastSeen])
+}
+
+model JobMatch {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  jobId         String   @map("job_id")
+  matchScore    Int      @map("match_score")
+  matchReasons  Json?    @map("match_reasons") // Array of strings explaining the score
+  missingSkills Json?    @map("missing_skills") // Array of strings for skills gap
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  job           Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_matches")
+  @@unique([userId, jobId])
+  @@index([userId, matchScore])
+  @@index([jobId])
+}
+
+// ============ END JOB DISCOVERY MODELS ============

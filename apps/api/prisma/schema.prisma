@@ -1,0 +1,507 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [citext, vector]
+}
+
+// ============ ENUMS ============
+
+enum UserRole {
+  USER
+  SUPPORT
+  ADMIN
+  SUPERADMIN
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DELETED
+
+  @@map("user_status")
+}
+
+enum ApplicationState {
+  DISCOVERED
+  MATCHED
+  PREPARING
+  NEEDS_INPUT
+  AWAITING_APPROVAL
+  APPROVED
+  SUBMITTING
+  RETRYING
+  SUBMITTED
+  CONFIRMED
+  REJECTED
+  FAILED
+  ESCALATED
+
+  @@map("application_state")
+}
+
+// ============ IDENTITY & AUTHENTICATION ============
+
+model User {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email             String     @unique @db.Citext
+  phone_e164        String     @unique
+  password_hash     String?
+  email_verified_at DateTime?
+  phone_verified_at DateTime?
+  role              UserRole   @default(USER)
+  status            UserStatus @default(PENDING)
+  referral_code     String     @unique
+  referred_by       String?    @db.Uuid
+  consent_version   String
+  consent_at        DateTime   @db.Timestamptz(6)
+  created_at        DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime   @updatedAt @db.Timestamptz(6)
+
+  otp_challenges    OtpChallenge[]
+  refresh_tokens    RefreshToken[]
+  profile           Profile?
+  preferences       JobPreferences?
+  answer_bank       AnswerBank[]
+  user_key          UserKey?
+  subscriptions     Subscription[]
+  payments          Payment[]
+  jobMatches        JobMatch[]
+  applications      Application[]
+  referralsSent     referrals[]     @relation("ReferralReferrer")
+  referralsReceived referrals?      @relation("ReferralReferee")
+  wallet            wallets?
+  creditLedger      credit_ledger[]
+
+  @@index([email])
+  @@index([phone_e164])
+  @@index([referral_code])
+  @@index([status])
+  @@map("users")
+}
+
+model OtpChallenge {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id     String?   @db.Uuid
+  target      String
+  channel     String
+  code_hash   String
+  attempts    Int       @default(0)
+  expires_at  DateTime  @db.Timestamptz(6)
+  consumed_at DateTime? @db.Timestamptz(6)
+  ip          String?
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([target, created_at(sort: Desc)])
+  @@index([target])
+  @@index([expires_at])
+  @@map("otp_challenges")
+}
+
+model RefreshToken {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
+  family_id  String    @db.Uuid
+  token_hash String    @unique
+  used_at    DateTime? @db.Timestamptz(6)
+  revoked_at DateTime? @db.Timestamptz(6)
+  expires_at DateTime  @db.Timestamptz(6)
+  user_agent String?
+  ip         String?
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([family_id])
+  @@index([expires_at])
+  @@map("refresh_tokens")
+}
+
+model UserKey {
+  user_id     String   @id @db.Uuid
+  dek_wrapped Bytes
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("user_keys")
+}
+
+// ============ PROFILE & PREFERENCES ============
+
+model Profile {
+  user_id         String    @id @db.Uuid
+  data_enc        Bytes
+  dek_wrapped     Bytes
+  current_version Int       @default(1)
+  confirmed_at    DateTime? @db.Timestamptz(6)
+  updated_at      DateTime  @updatedAt @db.Timestamptz(6)
+
+  user     User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  versions ProfileVersion[]
+
+  @@index([confirmed_at])
+  @@map("profiles")
+}
+
+model ProfileVersion {
+  user_id    String   @db.Uuid
+  version    Int
+  data_enc   Bytes
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  profile Profile @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  @@id([user_id, version])
+  @@index([user_id])
+  @@map("profile_versions")
+}
+
+model JobPreferences {
+  user_id            String   @id @db.Uuid
+  roles              String[]
+  locations          String[]
+  remote_preference  String?
+  min_salary_inr     Int?
+  max_salary_inr     Int?
+  excluded_companies String[] @default([])
+  min_match_score    Int      @default(60)
+  daily_cap          Int      @default(25)
+  auto_approve       Json?
+  updated_at         DateTime @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("job_preferences")
+}
+
+model AnswerBank {
+  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String                       @db.Uuid
+  question_hash String
+  question_text String
+  answer_enc    Bytes
+  embedding     Unsupported("vector(1024)")?
+  created_at    DateTime                     @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, question_hash])
+  @@index([user_id])
+  @@index([created_at])
+  @@map("answer_bank")
+}
+
+// ============ JOBS ============
+
+model Job {
+  id             String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source         String
+  externalId     String                       @map("external_id")
+  atsType        String?                      @map("ats_type")
+  applyUrl       String                       @map("apply_url")
+  canonicalUrl   String                       @map("canonical_url")
+  company        String
+  title          String
+  location       String?
+  salaryMin      Int?                         @map("salary_min")
+  salaryMax      Int?                         @map("salary_max")
+  employmentType String?                      @map("employment_type")
+  jdText         String?                      @map("jd_text")
+  contentHash    String                       @map("content_hash")
+  embedding      Unsupported("vector(1024)")?
+  status         String                       @default("OPEN")
+  firstSeen      DateTime                     @default(now()) @map("first_seen") @db.Timestamptz(6)
+  lastSeen       DateTime                     @default(now()) @map("last_seen") @db.Timestamptz(6)
+  rawData        Json?                        @map("raw_data")
+  jobMatches     JobMatch[]
+  applications   Application[]
+
+  @@unique([source, externalId])
+  @@index([canonicalUrl])
+  @@index([company, title, location])
+  @@index([status])
+  @@index([lastSeen])
+  @@map("jobs")
+}
+
+model JobMatch {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  jobId         String   @map("job_id") @db.Uuid
+  matchScore    Int      @map("match_score")
+  matchReasons  Json?    @map("match_reasons")
+  missingSkills Json?    @map("missing_skills")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId, matchScore])
+  @@index([jobId])
+  @@map("job_matches")
+}
+
+// ============ BILLING MODELS (Phase 3) ============
+
+model Plan {
+  id             String  @id
+  name           String
+  razorpayPlanId String? @map("razorpay_plan_id")
+  pricePaise     Int     @map("price_paise")
+  monthlyQuota   Int     @map("monthly_quota")
+  dailyCap       Int     @map("daily_cap")
+  features       Json?
+  active         Boolean @default(true)
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  planId            String    @map("plan_id")
+  razorpaySubId     String?   @unique @map("razorpay_sub_id")
+  status            String
+  currentPeriodEnd  DateTime? @map("current_period_end")
+  graceUntil        DateTime? @map("grace_until")
+  cancelAtPeriodEnd Boolean   @default(false) @map("cancel_at_period_end")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user          User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan          Plan                          @relation(fields: [planId], references: [id])
+  payments      Payment[]
+  renewalOption subscription_renewal_options?
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  subscriptionId    String?  @map("subscription_id") @db.Uuid
+  razorpayPaymentId String   @unique @map("razorpay_payment_id")
+  amountPaise       Int      @map("amount_paise")
+  currency          String   @default("INR")
+  status            String
+  method            String?
+  failureReason     String?  @map("failure_reason")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  invoices     Invoice[]
+
+  @@map("payments")
+}
+
+model Invoice {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId    String?  @map("payment_id") @db.Uuid
+  invoiceNo    String   @unique @map("invoice_no")
+  gstin        String?
+  taxablePaise Int?     @map("taxable_paise")
+  gstPaise     Int?     @map("gst_paise")
+  pdfKey       String?  @map("pdf_key")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@map("invoices")
+}
+
+model WebhookEvent {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        String
+  providerEventId String    @map("provider_event_id")
+  type            String
+  payload         Json
+  status          String    @default("RECEIVED")
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  processedAt     DateTime? @map("processed_at")
+
+  @@unique([provider, providerEventId])
+  @@map("webhook_events")
+}
+
+// ============ END BILLING MODELS ============
+
+// ============ APPLICATION AUTOMATION (Phase 5) ============
+
+model Application {
+  id                     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String           @map("user_id") @db.Uuid
+  jobId                  String           @map("job_id") @db.Uuid
+  state                  ApplicationState @default(DISCOVERED)
+  currentStepIndex       Int              @default(0) @map("current_step_index")
+  formSchema             Json?            @map("form_schema")
+  formPayload            Bytes?           @map("form_payload")
+  formPayloadHash        String?          @map("form_payload_hash")
+  screenshotUrl          String?          @map("screenshot_url")
+  submittedScreenshotUrl String?          @map("submitted_screenshot_url")
+  unknownFields          Json?            @map("unknown_fields")
+  matchScore             Float            @default(0) @map("match_score")
+  companyName            String           @map("company_name")
+  jobTitle               String           @map("job_title")
+  appliedAt              DateTime?        @map("applied_at") @db.Timestamptz(6)
+  approvedAt             DateTime?        @map("approved_at") @db.Timestamptz(6)
+  submittedAt            DateTime?        @map("submitted_at") @db.Timestamptz(6)
+  confirmedAt            DateTime?        @map("confirmed_at") @db.Timestamptz(6)
+  lastAtsCheckAt         DateTime?        @map("last_ats_check_at") @db.Timestamptz(6)
+  retryCount             Int              @default(0) @map("retry_count")
+  nextRetryAt            DateTime?        @map("next_retry_at") @db.Timestamptz(6)
+  lastErrorCode          String?          @map("last_error_code")
+  lastErrorMessage       String?          @map("last_error_message")
+  externalApplicationId  String?          @map("external_application_id")
+  lastAtsStage           String?          @map("last_ats_stage")
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job           Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  events        ApplicationEvent[]
+  approvalToken ApprovalToken?
+
+  @@unique([userId, jobId])
+  @@index([userId, state])
+  @@index([state, nextRetryAt])
+  @@index([confirmedAt])
+  @@map("applications")
+}
+
+model ApplicationEvent {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId String      @map("application_id") @db.Uuid
+  eventType     String      @map("event_type")
+  payload       Json?
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("application_events")
+}
+
+model FormDetectionCache {
+  jobId     String   @id @map("job_id") @db.Uuid
+  schema    Json
+  parsedAt  DateTime @default(now()) @map("parsed_at") @db.Timestamptz(6)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("form_detection_cache")
+}
+
+model ApprovalToken {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId   String      @unique @map("application_id") @db.Uuid
+  tokenHash       String      @unique @map("token_hash")
+  payloadHash     String      @map("payload_hash")
+  expiresAt       DateTime    @map("expires_at") @db.Timestamptz(6)
+  usedAt          DateTime?   @map("used_at") @db.Timestamptz(6)
+  usedByIp        String?     @map("used_by_ip")
+  usedByUserAgent String?     @map("used_by_user_agent")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("approval_tokens")
+}
+
+// ============ REFERRALS & CREDIT LEDGER (Phase 6) ============
+
+model referrals {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrer_id         String    @db.Uuid
+  referee_id          String    @unique @db.Uuid
+  code                String    @unique
+  referred_at         DateTime  @default(now()) @db.Timestamptz(6)
+  qualification_event String?
+  qualified_at        DateTime? @db.Timestamptz(6)
+  status              String    @default("PENDING")
+  fraud_flags         Json?
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+
+  referrer User @relation("ReferralReferrer", fields: [referrer_id], references: [id], onDelete: Cascade)
+  referee  User @relation("ReferralReferee", fields: [referee_id], references: [id], onDelete: Cascade)
+
+  @@index([referrer_id])
+  @@index([code])
+  @@map("referrals")
+}
+
+model credit_ledger {
+  id         BigInt   @id @default(autoincrement())
+  user_id    String   @db.Uuid
+  delta      Int
+  reason     String
+  ref_id     String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([reason, ref_id, user_id])
+  @@index([user_id])
+  @@index([created_at(sort: Desc)])
+  @@map("credit_ledger")
+}
+
+model wallets {
+  user_id      String   @id @db.Uuid
+  total_earned Int      @default(0)
+  total_spent  Int      @default(0)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model referral_config {
+  id                               Int      @id @default(1)
+  token_per_qualified_referee      Int      @default(500)
+  token_to_price_reduction_percent Decimal  @default(0.2) @db.Decimal(5, 2)
+  token_to_app_increase            Decimal  @default(0.1) @db.Decimal(5, 2)
+  max_tokens_per_renewal           Int      @default(5000)
+  hold_period_days                 Int      @default(7)
+  enabled                          Boolean  @default(true)
+  updated_at                       DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("referral_config")
+}
+
+model subscription_renewal_options {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subscription_id       String   @unique @db.Uuid
+  renewal_at            DateTime @db.Timestamptz(6)
+  tokens_available      Int
+  chosen_option         String?
+  tokens_redeemed       Int      @default(0)
+  discount_amount_paise Int?
+  app_increase          Int?
+  created_at            DateTime @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime @default(now()) @db.Timestamptz(6)
+
+  subscription Subscription @relation(fields: [subscription_id], references: [id], onDelete: Cascade)
+
+  @@map("subscription_renewal_options")
+}

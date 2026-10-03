@@ -1,0 +1,91 @@
+// Add these enums and models to apps/api/prisma/schema.prisma
+
+enum ApplicationState {
+  DISCOVERED
+  MATCHED
+  PREPARING
+  AWAITING_APPROVAL
+  NEEDS_INPUT
+  SUBMITTING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  ESCALATED
+}
+
+model Application {
+  id                   String @id @default(cuid())
+  userId               String
+  jobId                String
+  
+  // State Management
+  state                ApplicationState @default(DISCOVERED)
+  currentStepIndex     Int @default(0)
+  
+  // Form Data
+  formSchema           Json? // Cached form fields + metadata
+  formPayload          Bytes? // Encrypted form data
+  formPayloadHash      String? // SHA256 hash
+  screenshotUrl        String?
+  
+  // Metadata
+  matchScore           Float @default(0)
+  companyName          String
+  jobTitle             String
+  appliedAt            DateTime?
+  submittedAt          DateTime?
+  confirmedAt          DateTime?
+  
+  // Retry Logic
+  retryCount           Int @default(0)
+  nextRetryAt          DateTime?
+  lastErrorCode        String?
+  lastErrorMessage     String?
+  
+  // Relationships
+  user                 User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job                  Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  events               ApplicationEvent[]
+  
+  @@unique([userId, jobId])
+  @@index([userId, state])
+  @@index([state, nextRetryAt])
+  @@index([createdAt])
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt()
+}
+
+model ApplicationEvent {
+  id                   String @id @default(cuid())
+  applicationId        String
+  application          Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  
+  eventType            String
+  payload              Json?
+  
+  @@index([applicationId])
+  @@index([eventType])
+  
+  createdAt            DateTime @default(now())
+}
+
+model FormDetectionCache {
+  jobId                String @unique
+  schema               Json
+  rawHtml              String? @db.Text
+  parsedAt             DateTime @default(now())
+  expiresAt            DateTime
+  
+  @@index([expiresAt])
+  @@index([jobId])
+  
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt()
+}
+
+// Add to User model:
+// applications         Application[]
+
+// Add to Job model:
+// applications         Application[]

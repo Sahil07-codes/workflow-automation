@@ -1,0 +1,32 @@
+{
+  "jobs": [
+    {
+      "id": 12345,
+      "title": "Senior Backend Engineer",
+      "location": {
+        "name": "Bangalore, India"
+      },
+      "departments": [
+        {
+          "name": "Engineering"
+        }
+      ],
+      "absolute_url": "https://company.greenhouse.io/jobs/12345",
+      "internal_job_id": "internal-12345"
+    },
+    {
+      "id": 12346,
+      "title": "Frontend Engineer (React)",
+      "location": {
+        "name": "Remote"
+      },
+      "departments": [
+        {
+          "name": "Engineering"
+        }
+      ],
+      "absolute_url": "https://company.greenhouse.io/jobs/12346",
+      "internal_job_id": "internal-12346"
+    }
+  ]
+}

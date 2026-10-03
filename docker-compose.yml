@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: autoapply-postgres
+    environment:
+      POSTGRES_USER: autoapply
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: autoapply
+      POSTGRES_INITDB_ARGS: "-c shared_preload_libraries=vector"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoapply -d autoapply"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - autoapply-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: autoapply-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - autoapply-network
+
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: autoapply-s3
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: ${S3_REGION:-ap-south-1}
+      GATEWAY_LISTEN: 0.0.0.0:4566
+      PERSISTENCE: "1"
+    ports:
+      - "9000:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    networks:
+      - autoapply-network
+
+  # Optional: Local KMS mock (can be replaced with real AWS later)
+  # For now we'll use a local passthrough in dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  localstack_data:
+
+networks:
+  autoapply-network:
+    driver: bridge

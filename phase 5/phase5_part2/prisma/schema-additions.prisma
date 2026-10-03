@@ -1,0 +1,25 @@
+// Add these models to apps/api/prisma/schema.prisma
+
+model ApprovalToken {
+  id                String @id @default(cuid())
+  applicationId     String @unique
+  application       Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  
+  tokenHash         String @unique // SHA256 hash of plaintext token
+  payloadHash       String          // SHA256 hash of form payload for integrity
+  
+  expiresAt         DateTime        // 48-hour expiry
+  usedAt            DateTime?       // Timestamp when token was used
+  usedByIp          String?         // IP address that approved
+  usedByUserAgent   String?         // User agent of approving device
+  
+  createdAt         DateTime @default(now())
+  
+  @@index([expiresAt])
+  @@index([applicationId])
+  @@map("approval_tokens")
+}
+
+// Add these fields to existing Application model:
+// approvedAt        DateTime?       // When user approved
+// payloadHash       String?         // SHA256 of form payload
