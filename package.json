@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "AutoApply - SaaS job application automation for India",
   "private": true,
+  "packageManager": "pnpm@12.8.1",
   "workspaces": [
     "apps/*",
     "packages/*"
