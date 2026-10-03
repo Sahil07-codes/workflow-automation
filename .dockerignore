@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/coverage
+.env
+.env.*
+**/.env
+**/.env.*
+venv
+**/venv
+backup_*.sql
+backup_*.dump
+*.log
