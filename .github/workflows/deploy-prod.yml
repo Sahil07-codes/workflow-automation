@@ -11,6 +11,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     environment:
       name: production
       url: https://api.autoapply.app
@@ -74,9 +76,7 @@ jobs:
 
       - name: Notify team
         uses: 8398a7/action-slack@v3
-        if: always()
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always() && env.SLACK_WEBHOOK_URL != ''
         with:
           status: ${{ job.status }}
           text: 'Production deployment v${{ github.event.inputs.version }}'
