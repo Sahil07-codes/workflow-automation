@@ -42,6 +42,7 @@ export interface AppConfig {
 
   cors_origin: string;
   sentry_dsn?: string;
+  sentry_environment?: string;
 }
 
 // Maps each AppConfig key (lowercase_snake_case) to the actual process.env
@@ -83,6 +84,7 @@ const ENV_KEY_MAP: Record<keyof AppConfig, string> = {
   llm_scoring_enabled: 'LLM_SCORING_ENABLED',
   cors_origin: 'CORS_ORIGIN',
   sentry_dsn: 'SENTRY_DSN',
+  sentry_environment: 'SENTRY_ENVIRONMENT',
 };
 
 const validationSchema = Joi.object<AppConfig>({
@@ -129,6 +131,7 @@ const validationSchema = Joi.object<AppConfig>({
 
   cors_origin: Joi.string().default('*'),
   sentry_dsn: Joi.string().optional().allow(''),
+  sentry_environment: Joi.string().optional().allow(''),
 });
 
 /**

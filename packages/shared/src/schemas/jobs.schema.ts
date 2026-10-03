@@ -7,6 +7,7 @@ export const jobListQuerySchema = z.object({
   minMatchScore: z.number().min(0).max(100).optional(),
   location: z.string().optional(),
   company: z.string().optional(),
+  query: z.string().trim().min(1).optional(),
   cursor: z.string().optional(),
   limit: z.number().min(1).max(100).default(20),
 });

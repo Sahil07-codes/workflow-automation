@@ -19,18 +19,34 @@ export class JobsController {
   @Get()
   @HttpCode(200)
   async listJobs(@CurrentUser() user: { id: string }, @Query() rawQuery: any) {
-    // Validate and parse query
-    const query = jobListQuerySchema.parse({
-      source: rawQuery.source,
-      status: rawQuery.status,
-      minMatchScore: rawQuery.minMatchScore ? parseInt(rawQuery.minMatchScore, 10) : undefined,
-      location: rawQuery.location,
-      company: rawQuery.company,
-      cursor: rawQuery.cursor,
-      limit: rawQuery.limit ? parseInt(rawQuery.limit, 10) : 20,
-    });
+    return this.jobsService.getJobsForUser(user.id, this.parseListQuery(rawQuery));
+  }
 
-    return this.jobsService.getJobsForUser(user.id, query);
+  /**
+   * GET /jobs/recommended - list open jobs meeting the user's match-score preference
+   */
+  @Get('recommended')
+  @HttpCode(200)
+  async getRecommendedJobs(
+    @CurrentUser() user: { id: string },
+    @Query() rawQuery: any,
+  ) {
+    return this.jobsService.getJobsForUser(
+      user.id,
+      this.parseListQuery({ ...rawQuery, status: 'OPEN' }),
+    );
+  }
+
+  /**
+   * GET /jobs/search?query=... - search open jobs by title, company, location, or description
+   */
+  @Get('search')
+  @HttpCode(200)
+  async searchJobs(@CurrentUser() user: { id: string }, @Query() rawQuery: any) {
+    return this.jobsService.getJobsForUser(
+      user.id,
+      this.parseListQuery({ ...rawQuery, status: 'OPEN' }),
+    );
   }
 
   /**
@@ -49,5 +65,20 @@ export class JobsController {
   @HttpCode(200)
   async getMatchStats(@CurrentUser() user: { id: string }) {
     return this.jobsService.getMatchStats(user.id);
+  }
+
+  private parseListQuery(rawQuery: any) {
+    return jobListQuerySchema.parse({
+      source: rawQuery.source,
+      status: rawQuery.status,
+      minMatchScore: rawQuery.minMatchScore
+        ? parseInt(rawQuery.minMatchScore, 10)
+        : undefined,
+      location: rawQuery.location,
+      company: rawQuery.company,
+      query: rawQuery.query,
+      cursor: rawQuery.cursor,
+      limit: rawQuery.limit ? parseInt(rawQuery.limit, 10) : 20,
+    });
   }
 }

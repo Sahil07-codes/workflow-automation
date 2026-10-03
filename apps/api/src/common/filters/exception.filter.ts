@@ -1,5 +1,6 @@
 import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
 import { AppException } from '../exceptions/app.exception';
+import * as Sentry from '@sentry/node';
 import { v4 as uuid } from 'uuid';
 
 @Catch()
@@ -32,6 +33,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
 
     const requestId = request.id || uuid();
+
+    if (statusCode >= 500) {
+      Sentry.captureException(exception, {
+        tags: { requestId, statusCode: String(statusCode) },
+        extra: {
+          method: request.method,
+          route: request.route?.path ?? 'unmatched',
+        },
+      });
+    }
 
     const errorEnvelope = {
       code,

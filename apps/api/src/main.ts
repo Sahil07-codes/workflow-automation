@@ -11,14 +11,50 @@ register({
 });
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/node';
+import { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/exception.filter';
+import { MetricsService } from './modules/metrics/metrics.service';
 import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableShutdownHooks();
   const configService = app.get(ConfigService);
+  const sentryDsn = configService.get<string>('sentry_dsn');
+  const nodeEnv = configService.get<string>('node_env', 'development');
+
+  if (sentryDsn) {
+    Sentry.init({
+      dsn: sentryDsn,
+      environment: configService.get<string>('sentry_environment', nodeEnv),
+      tracesSampleRate: nodeEnv === 'production' ? 0.1 : 1.0,
+    });
+  }
+
+  const metrics = app.get(MetricsService);
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    const startedAt = process.hrtime.bigint();
+    response.on('finish', () => {
+      const routePath = request.route?.path;
+      const route = routePath
+        ? `${request.baseUrl}${routePath}` || '/'
+        : 'unmatched';
+      const durationSeconds =
+        Number(process.hrtime.bigint() - startedAt) / 1_000_000_000;
+
+      if (route !== '/v1/metrics') {
+        metrics.recordHttpRequest(
+          request.method,
+          route,
+          response.statusCode,
+          durationSeconds,
+        );
+      }
+    });
+    next();
+  });
 
   // Security
   app.use(helmet());
@@ -42,7 +78,10 @@ async function bootstrap() {
   }
 
   app.enableCors({
-    origin: (origin, callback) => {
+    origin: (
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) => {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {

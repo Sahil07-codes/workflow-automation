@@ -7,8 +7,8 @@ export class RazorpayClientService {
   private keySecret: string;
 
   constructor(private config: ConfigService) {
-    this.keyId = this.config.get('razorpay_key_id', { infer: true }) || '';
-    this.keySecret = this.config.get('razorpay_key_secret', { infer: true }) || '';
+    this.keyId = this.config.get<string>('razorpay_key_id') || '';
+    this.keySecret = this.config.get<string>('razorpay_key_secret') || '';
   }
 
   async createSubscription(planId: string, quantity: number = 1) {

@@ -58,6 +58,12 @@ pnpm --filter @autoapply/worker dev
 
 The API listens on `http://localhost:3000` (routes under `/v1`). The worker runs discovery, Phase 5 application, and Phase 6 referral-reward queues.
 
+### Observability
+
+- Set `SENTRY_DSN` to enable Sentry error reporting; leave it empty to disable reporting locally. `SENTRY_ENVIRONMENT` optionally overrides the environment label.
+- `GET /v1/metrics` exposes Prometheus HTTP request counts, request-duration histograms, and Node.js process metrics. It uses the API's normal JWT authentication; configure the scraper with a bearer token. The metrics endpoint excludes its own scrape traffic. Database pool and cache hit-rate metrics are not currently exposed.
+- CloudWatch alarms require AWS credentials, a deployment region, and metrics published by the deployed service. The local API is not a Lambda function, so do not configure its alarms against the `AWS/Lambda` namespace.
+
 ### 7. Run checks (optional)
 ```bash
 pnpm run type-check
@@ -110,7 +116,7 @@ autoapply/
 
 - **Phases 0-2:** Infrastructure, authentication, encrypted profiles, preferences, and answer bank.
 - **Phase 3:** Subscription billing and application entitlements.
-- **Phase 4:** Greenhouse, Lever, and Ashby job discovery.
+- **Phase 4:** Greenhouse, Lever, and Ashby job discovery, with authenticated job listing, personalized recommendations (`GET /v1/jobs/recommended`), and keyword search (`GET /v1/jobs/search?query=...`).
 - **Phase 5:** Application state tracking, form matching/preparation, encrypted payloads, approval tokens, explicit user approval, safe submission/retry, private screenshots, and ATS confirmation checks.
 - **Phase 6:** Referral attribution, subscription qualification, delayed token rewards, wallet/ledger, and quota/renewal redemption.
 

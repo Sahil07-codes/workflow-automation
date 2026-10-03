@@ -19,6 +19,7 @@ import { JwtStrategy } from './common/guards/jwt.strategy';
 import { validate } from './common/config/configuration';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     JobsModule,
     ApplicationsModule,
     ReferralsModule,
+    MetricsModule,
   ],
   providers: [
     PrismaService,

@@ -41,6 +41,14 @@ export class JobsRepository {
         mode: 'insensitive',
       };
     }
+    if (query.query) {
+      where.OR = [
+        { title: { contains: query.query, mode: 'insensitive' } },
+        { company: { contains: query.query, mode: 'insensitive' } },
+        { location: { contains: query.query, mode: 'insensitive' } },
+        { jdText: { contains: query.query, mode: 'insensitive' } },
+      ];
+    }
 
     // Fetch jobs with optional match data
     const jobs = await this.prisma.job.findMany({
@@ -136,6 +144,14 @@ export class JobsRepository {
         contains: query.company,
         mode: 'insensitive',
       };
+    }
+    if (query.query) {
+      where.OR = [
+        { title: { contains: query.query, mode: 'insensitive' } },
+        { company: { contains: query.query, mode: 'insensitive' } },
+        { location: { contains: query.query, mode: 'insensitive' } },
+        { jdText: { contains: query.query, mode: 'insensitive' } },
+      ];
     }
 
     return this.prisma.job.count({ where });
