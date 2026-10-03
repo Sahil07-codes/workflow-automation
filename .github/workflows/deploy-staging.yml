@@ -4,9 +4,36 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: autoapply
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: autoapply
+        options: >-
+          --health-cmd "pg_isready -U autoapply -d autoapply"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
 
     steps:
       - uses: actions/checkout@v3
@@ -32,10 +59,16 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Setup database
+        env:
+          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+        run: pnpm --filter @autoapply/api exec prisma migrate deploy --schema prisma/schema.prisma
+
       - name: Run tests
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+          REDIS_URL: redis://localhost:6379/1
         run: pnpm run test
 
       - name: Build Docker image (staging)
