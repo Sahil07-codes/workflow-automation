@@ -96,7 +96,8 @@ jobs:
       - name: Notify Slack
         if: success()
         uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         with:
           status: ${{ job.status }}
           text: 'Staging deployment complete'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
