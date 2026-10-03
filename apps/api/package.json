@@ -4,6 +4,7 @@
   "description": "AutoApply NestJS API server",
   "main": "dist/main.js",
   "scripts": {
+    "postinstall": "prisma generate",
     "build": "nest build",
     "start": "node dist/main",
     "dev": "nest start --watch",
