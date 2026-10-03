@@ -1,5 +1,4 @@
 import { GreenhouseAdapter } from './greenhouse.adapter';
-import { DiscoveryQuery, NormalizedJob } from '@autoapply/shared';
 
 describe('GreenhouseAdapter', () => {
   let adapter: GreenhouseAdapter;

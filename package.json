@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "pnpm -r --filter=./apps/api dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --workspace-concurrency=1 test",
     "test:unit": "pnpm -r test --testPathPattern=spec.ts",
     "test:e2e": "pnpm -r test:e2e",
     "lint": "pnpm -r lint",

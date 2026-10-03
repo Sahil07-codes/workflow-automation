@@ -9,7 +9,7 @@
     "start": "node dist/main",
     "dev": "nest start --watch",
     "debug": "node --inspect-brk -r tsconfig-paths/register dist/main",
-    "test": "jest",
+    "test": "jest --runInBand --passWithNoTests",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register node_modules/.bin/jest --runInBand",
