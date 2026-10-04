@@ -32,6 +32,21 @@ export class BillingController {
     return this.billingService.getPlans();
   }
 
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  async getOverview(@CurrentUser() user: { id: string }) {
+    const [subscription, plans, invoiceResponse] = await Promise.all([
+      this.billingService.getSubscription(user.id),
+      this.billingService.getPlans(),
+      this.getInvoicesForUser(user.id),
+    ]);
+    return {
+      subscription,
+      plans,
+      invoices: invoiceResponse.invoices,
+    };
+  }
+
   @Post('subscribe')
   @UseGuards(JwtAuthGuard)
   @HttpCode(201)
@@ -49,7 +64,11 @@ export class BillingController {
   @Get('invoices')
   @UseGuards(JwtAuthGuard)
   async getInvoices(@CurrentUser() user: any) {
-    const subscription = await this.billingService.getSubscription(user.id);
+    return this.getInvoicesForUser(user.id);
+  }
+
+  private async getInvoicesForUser(userId: string) {
+    const subscription = await this.billingService.getSubscription(userId);
     return { subscriptionId: subscription?.id, invoices: [] };
   }
 

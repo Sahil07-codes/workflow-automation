@@ -17,7 +17,12 @@ export interface AppConfig {
   otp_ttl: number;
   otp_max_attempts: number;
   otp_pepper: string;
+  otp_transport: 'console' | 'ses';
+  sms_otp_transport: 'disabled' | 'twilio';
   otp_sender_email?: string;
+  twilio_account_sid?: string;
+  twilio_auth_token?: string;
+  twilio_from_number?: string;
   otp_resend_cooldown: number;
 
   kms_key_id: string;
@@ -64,7 +69,12 @@ const ENV_KEY_MAP: Record<keyof AppConfig, string> = {
   otp_ttl: 'OTP_TTL',
   otp_max_attempts: 'OTP_MAX_ATTEMPTS',
   otp_pepper: 'OTP_PEPPER',
+  otp_transport: 'OTP_TRANSPORT',
+  sms_otp_transport: 'SMS_OTP_TRANSPORT',
   otp_sender_email: 'OTP_SENDER_EMAIL',
+  twilio_account_sid: 'TWILIO_ACCOUNT_SID',
+  twilio_auth_token: 'TWILIO_AUTH_TOKEN',
+  twilio_from_number: 'TWILIO_FROM_NUMBER',
   otp_resend_cooldown: 'OTP_RESEND_COOLDOWN',
   kms_key_id: 'KMS_KEY_ID',
   kms_region: 'KMS_REGION',
@@ -106,7 +116,48 @@ const validationSchema = Joi.object<AppConfig>({
   otp_ttl: Joi.number().min(60).max(3600).default(300),
   otp_max_attempts: Joi.number().min(1).max(10).default(5),
   otp_pepper: Joi.string().required(),
-  otp_sender_email: Joi.string().email().optional(),
+  otp_transport: Joi.string()
+    .valid('console', 'ses')
+    .when('node_env', {
+      is: 'production',
+      then: Joi.valid('ses'),
+    })
+    .default('ses'),
+  sms_otp_transport: Joi.string()
+    .valid('disabled', 'twilio')
+    .when('node_env', {
+      is: 'production',
+      then: Joi.valid('twilio'),
+    })
+    .default('disabled'),
+  otp_sender_email: Joi.string()
+    .email()
+    .when('otp_transport', {
+      is: 'ses',
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
+  twilio_account_sid: Joi.string()
+    .pattern(/^AC[0-9a-fA-F]{32}$/)
+    .when('sms_otp_transport', {
+      is: 'twilio',
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
+  twilio_auth_token: Joi.string()
+    .min(32)
+    .when('sms_otp_transport', {
+      is: 'twilio',
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
+  twilio_from_number: Joi.string()
+    .pattern(/^\+[1-9]\d{7,14}$/)
+    .when('sms_otp_transport', {
+      is: 'twilio',
+      then: Joi.required(),
+      otherwise: Joi.optional().allow(''),
+    }),
   otp_resend_cooldown: Joi.number().min(10).default(60),
 
   kms_key_id: Joi.string().required(),

@@ -113,6 +113,7 @@ export class ApplicationsService {
     userId: string,
     stateValue?: string,
     requestedLimit = 50,
+    query?: string,
   ) {
     let state: ApplicationState | undefined;
     if (stateValue) {
@@ -124,7 +125,7 @@ export class ApplicationsService {
     const limit = Number.isFinite(requestedLimit)
       ? Math.max(1, Math.min(Math.floor(requestedLimit), 100))
       : 50;
-    return this.applicationRepo.findByUserId(userId, state, limit);
+    return this.applicationRepo.findByUserId(userId, state, limit, query);
   }
 
   async provideMissingAnswers(

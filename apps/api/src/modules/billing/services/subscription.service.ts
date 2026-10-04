@@ -19,12 +19,16 @@ export class SubscriptionService {
       plan.razorpayPlanId || planId,
     );
 
-    return this.subRepo.create({
+    const subscription = await this.subRepo.create({
       userId,
       planId,
       razorpaySubId: razorpaySub.id,
       status: 'CREATED',
     });
+    return {
+      ...subscription,
+      checkout_url: razorpaySub.short_url,
+    };
   }
 
   async cancelSubscription(userId: string) {

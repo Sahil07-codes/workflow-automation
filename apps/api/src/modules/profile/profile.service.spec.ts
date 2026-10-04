@@ -71,12 +71,15 @@ describe('ProfileService', () => {
       expect(mockEncryption.decryptProfileData).toHaveBeenCalled();
     });
 
-    it('should throw if profile not found', async () => {
+    it('should return an empty profile when one has not been created', async () => {
       mockPrisma.profile.findUnique.mockResolvedValueOnce(null);
 
-      await expect(service.getProfile('nonexistent')).rejects.toThrow(
-        AppException,
-      );
+      await expect(service.getProfile('nonexistent')).resolves.toEqual({
+        user_id: 'nonexistent',
+        data: {},
+        version: 0,
+        confirmed_at: null,
+      });
     });
   });
 

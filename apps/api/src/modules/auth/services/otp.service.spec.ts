@@ -231,7 +231,7 @@ describe('OtpService', () => {
 describe('OtpDelivery', () => {
   it('delivers through the console transport without throwing', async () => {
     const configService = {
-      get: jest.fn((key: string) => (key === 'OTP_TRANSPORT' ? 'console' : undefined)),
+      get: jest.fn((key: string) => (key === 'otp_transport' ? 'console' : undefined)),
     } as unknown as ConfigService;
     const delivery = new OtpDelivery(configService);
 
@@ -241,8 +241,8 @@ describe('OtpDelivery', () => {
   it('rejects the console transport in production', () => {
     const configService = {
       get: jest.fn((key: string) => {
-        if (key === 'OTP_TRANSPORT') return 'console';
-        if (key === 'NODE_ENV') return 'production';
+        if (key === 'otp_transport') return 'console';
+        if (key === 'node_env') return 'production';
         return undefined;
       }),
     } as unknown as ConfigService;
@@ -250,5 +250,72 @@ describe('OtpDelivery', () => {
     expect(() => new OtpDelivery(configService)).toThrow(
       'OTP_TRANSPORT=console is not allowed in production',
     );
+  });
+
+  it('sends SMS OTPs through the configured Twilio account', async () => {
+    const accountSid = `AC${'a'.repeat(32)}`;
+    const configValues: Record<string, string> = {
+      otp_transport: 'ses',
+      sms_otp_transport: 'twilio',
+      twilio_account_sid: accountSid,
+      twilio_auth_token: 'b'.repeat(32),
+      twilio_from_number: '+14155552671',
+    };
+    const configService = {
+      get: jest.fn((key: string) => configValues[key]),
+    } as unknown as ConfigService;
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 201,
+    } as Response);
+
+    try {
+      const delivery = new OtpDelivery(configService);
+      await expect(
+        delivery.deliver('+919999999999', 'SMS', '123456'),
+      ).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: `Basic ${Buffer.from(`${accountSid}:${'b'.repeat(32)}`).toString('base64')}`,
+          }),
+          body: expect.any(URLSearchParams),
+        }),
+      );
+      const requestBody = fetchMock.mock.calls[0][1]?.body as URLSearchParams;
+      expect(requestBody.get('To')).toBe('+919999999999');
+      expect(requestBody.get('From')).toBe('+14155552671');
+      expect(requestBody.get('Body')).toContain('123456');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('reports Twilio delivery failures without treating them as successful', async () => {
+    const configService = {
+      get: jest.fn((key: string) => ({
+        otp_transport: 'ses',
+        sms_otp_transport: 'twilio',
+        twilio_account_sid: `AC${'a'.repeat(32)}`,
+        twilio_auth_token: 'b'.repeat(32),
+        twilio_from_number: '+14155552671',
+      })[key]),
+    } as unknown as ConfigService;
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 429,
+    } as Response);
+
+    try {
+      const delivery = new OtpDelivery(configService);
+      await expect(
+        delivery.deliver('+919999999999', 'SMS', '123456'),
+      ).rejects.toMatchObject({ code: 'OTP_DELIVERY_FAILED', statusCode: 503 });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

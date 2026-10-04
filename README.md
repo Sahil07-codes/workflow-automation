@@ -28,6 +28,9 @@ cp .env.example apps/api/.env
 ### 3. Install dependencies and start infrastructure
 ```bash
 pnpm install
+cd frontend && npm ci
+cd admin-console && npm ci
+cd ../..
 pnpm run docker:up
 docker compose ps
 ```
@@ -54,9 +57,31 @@ In separate terminals:
 ```bash
 pnpm --filter @autoapply/api dev
 pnpm --filter @autoapply/worker dev
+npm --prefix frontend run dev
+npm --prefix frontend/admin-console run dev
 ```
 
-The API listens on `http://localhost:3000` (routes under `/v1`). The worker runs discovery, Phase 5 application, and Phase 6 referral-reward queues.
+The API listens on `http://localhost:3000` (routes under `/v1`). The customer client runs on `http://localhost:5173`; the independently built admin console runs on `http://127.0.0.1:5180`. Both frontends use `VITE_API_BASE_URL=http://localhost:3000/v1` by default and can be configured independently for deployment. The worker runs discovery, Phase 5 application, and Phase 6 referral-reward queues.
+
+### Frontend applications
+
+The customer client and restricted admin console are separate Vite applications with independent dependency lockfiles and build outputs. Set each app's `VITE_API_BASE_URL` to the API origin including `/v1`; set the backend `CORS_ORIGIN` to the exact deployed client and admin origins (comma-separated, with no wildcard in production). The backend issues short-lived HttpOnly access and rotating refresh cookies for browser sessions. Admin routes require an authenticated `ADMIN` or `SUPERADMIN` account; ordinary user accounts cannot use the admin console.
+
+Build both frontends with `pnpm run build:frontends`, or build the complete workspace with `pnpm run build`.
+
+### Production release to AWS ECS
+
+The manual `Deploy to Production` workflow can push a scanned API image to ECR and roll it out to an existing ECS service. Run it from `main` and provide a Docker-safe release version without the `v` prefix. Configure the `production` GitHub environment with:
+
+- Secret `AWS_ROLE_TO_ASSUME`: an AWS IAM role trusted through GitHub Actions OIDC; do not use long-lived AWS access keys.
+- Variables `AWS_REGION` (defaults to `ap-south-1`), `ECR_REPOSITORY`, `ECS_CLUSTER`, and `ECS_SERVICE`.
+- Optional variable `ECS_CONTAINER_NAME` if the API container in the task definition is not named `api`.
+
+The IAM role needs ECR image-push access, permission to describe/register task definitions and update/describe the configured ECS service, and narrowly scoped `iam:PassRole` for that service's task and execution roles. The ECR repository, ECS cluster, active ECS service, task definition, networking, load balancer, health check, and runtime secrets must already be provisioned. Enable the ECS deployment circuit breaker with rollback on the service.
+
+**Infrastructure is not yet a complete production stack.** `infra/terraform` currently scaffolds an ECS cluster and load balancer but does not create the ECR repository, ECS task definition, or ECS service; the compute module is passed `enable_ecs_service = false`. Provision those resources and configure the GitHub environment before using the workflow. The workflow does not create AWS infrastructure or migrate a production database.
+
+For production OTP delivery, configure `OTP_TRANSPORT=ses` and a verified `OTP_SENDER_EMAIL`, plus `SMS_OTP_TRANSPORT=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an E.164 `TWILIO_FROM_NUMBER`. Store provider credentials in the runtime secret manager. `OTP_TRANSPORT=console` is development-only and the API rejects it in production.
 
 ### Observability
 

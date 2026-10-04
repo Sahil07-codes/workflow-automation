@@ -169,8 +169,9 @@ model ProfileVersion {
 
 model JobPreferences {
   user_id            String   @id @db.Uuid
-  roles              String[]
-  locations          String[]
+  roles              String[] @default([])
+  locations          String[] @default([])
+  skills             String[] @default([])
   remote_preference  String?
   min_salary_inr     Int?
   max_salary_inr     Int?

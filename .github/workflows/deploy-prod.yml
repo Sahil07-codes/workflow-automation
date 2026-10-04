@@ -4,21 +4,50 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version'
+        description: Release version without a leading v
         required: true
         type: string
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    permissions:
+      contents: write
+      id-token: write
     environment:
       name: production
       url: https://api.autoapply.app
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME || 'api' }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] || {
+            echo "Release version must be a Docker-safe tag of at most 128 characters." >&2
+            exit 1
+          }
+          for name in AWS_ROLE_TO_ASSUME ECR_REPOSITORY ECS_CLUSTER ECS_SERVICE; do
+            if [[ -z "${!name}" ]]; then
+              echo "Configure $name in the production GitHub environment before deploying." >&2
+              exit 1
+            fi
+          done
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -30,10 +59,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install customer frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Install admin frontend dependencies
+        run: npm ci --prefix frontend/admin-console
 
       - name: Generate Prisma Client
         run: pnpm --filter @autoapply/api exec prisma generate --schema prisma/schema.prisma
@@ -41,42 +76,131 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Run all tests
+      - name: Run tests
         env:
           NODE_ENV: test
-          DATABASE_URL: postgresql://autoapply:password@localhost:5432/autoapply
+          DATABASE_URL: postgresql://autoapply:autoapply_test_password@localhost:5432/autoapply_test?schema=public
         run: pnpm run test && pnpm --filter @autoapply/api test:e2e
 
-      - name: Build Docker image (production)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build production image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
           docker build \
-            -t autoapply-api:${{ github.event.inputs.version }} \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
+            -t "autoapply-api:${RELEASE_VERSION}" \
+            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}" \
             -f apps/api/Dockerfile .
 
-      - name: Security scan
-        uses: aquasecurity/trivy-action@master
+      - name: Scan production image
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: autoapply-api:${{ github.event.inputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL'
+          image-ref: autoapply-api:${{ inputs.version }}
+          format: table
+          severity: CRITICAL,HIGH
           exit-code: '1'
 
-      # Production deployment would go here (blue/green, rolling, etc.)
-      # with health checks and automatic rollback
+      - name: Push production image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}"
+
+      - name: Deploy image to ECS
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          service_json="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --output json)"
+          task_definition_arn="$(jq -r '.services[0].taskDefinition // empty' <<< "$service_json")"
+          service_status="$(jq -r '.services[0].status // empty' <<< "$service_json")"
+          if [[ -z "$task_definition_arn" || "$service_status" != "ACTIVE" ]]; then
+            echo "ECS service $ECS_SERVICE was not found or is not active in cluster $ECS_CLUSTER." >&2
+            exit 1
+          fi
+
+          aws ecs describe-task-definition \
+            --task-definition "$task_definition_arn" \
+            --query taskDefinition \
+            --output json > /tmp/task-definition.json
+
+          jq \
+            --arg name "$ECS_CONTAINER_NAME" \
+            --arg image "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}" \
+            '
+              if ([.containerDefinitions[] | select(.name == $name)] | length) != 1 then
+                error("The configured ECS container name must match exactly one task definition container")
+              else
+                .containerDefinitions |= map(if .name == $name then .image = $image else . end)
+              end
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy,
+                  .deregisteredAt
+                )
+            ' /tmp/task-definition.json > /tmp/register-task-definition.json
+
+          new_task_definition_arn="$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/register-task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$new_task_definition_arn" \
+            --output json > /tmp/ecs-update.json
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+
+          deployed_task_definition="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
+          rollout_state="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`].rolloutState | [0]' \
+            --output text)"
+          if [[ "$deployed_task_definition" != "$new_task_definition_arn" || "$rollout_state" != "COMPLETED" ]]; then
+            echo "ECS did not complete the requested deployment (rollout state: $rollout_state)." >&2
+            exit 1
+          fi
 
       - name: Create release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          release_name: Release ${{ github.event.inputs.version }}
-          body: 'See CHANGELOG.md for details'
+          tag_name: v${{ inputs.version }}
+          name: Release v${{ inputs.version }}
+          body: "Production image deployed to ECS. Source commit: ${{ github.sha }}"
 
       - name: Notify team
         uses: 8398a7/action-slack@v3
         if: always() && env.SLACK_WEBHOOK_URL != ''
         with:
           status: ${{ job.status }}
-          text: 'Production deployment v${{ github.event.inputs.version }}'
+          text: 'Production deployment v${{ inputs.version }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

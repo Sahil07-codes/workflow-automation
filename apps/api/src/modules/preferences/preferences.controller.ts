@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { PreferencesService } from './preferences.service';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
+import { ZodValidationPipe } from '@/common/pipes/zod-validation.pipe';
+import { UpdatePreferencesRequestSchema } from '@autoapply/shared';
 
 @Controller('preferences')
 export class PreferencesController {
@@ -24,7 +26,7 @@ export class PreferencesController {
   @HttpCode(HttpStatus.OK)
   async updatePreferences(
     @CurrentUser() user: any,
-    @Body() data: any,
+    @Body(new ZodValidationPipe(UpdatePreferencesRequestSchema)) data: any,
   ) {
     return this.preferencesService.updatePreferences(user.id, data);
   }

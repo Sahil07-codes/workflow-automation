@@ -77,6 +77,20 @@ async function bootstrap() {
     throw new Error('CORS_ORIGIN must list allowed origins in production.');
   }
 
+  const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    const origin = request.get('origin');
+    if (
+      mutatingMethods.has(request.method) &&
+      origin &&
+      !allowedOrigins.includes(origin)
+    ) {
+      response.status(403).json({ message: 'Origin not allowed.' });
+      return;
+    }
+    next();
+  });
+
   app.enableCors({
     origin: (
       origin: string | undefined,

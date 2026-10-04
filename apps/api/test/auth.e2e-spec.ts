@@ -112,6 +112,54 @@ describe('Auth E2E', () => {
         .expect(401);
     });
 
+    it('should use HttpOnly cookies for browser sessions without exposing browser tokens', async () => {
+      const tokens = await createVerifiedUserAndLogin(
+        app.getHttpServer(),
+        otpDelivery,
+        'cookie-session@example.com',
+        '+919999999996',
+      );
+
+      const refreshResponse = await request(app.getHttpServer())
+        .post('/v1/auth/refresh')
+        .set('Origin', 'http://localhost:5173')
+        .set('Cookie', `autoapply_refresh=${tokens.refresh_token}`)
+        .send({})
+        .expect(200);
+
+      expect(refreshResponse.body).not.toHaveProperty('access_token');
+      expect(refreshResponse.body).not.toHaveProperty('refresh_token');
+      const cookieHeader = refreshResponse.headers['set-cookie'];
+      const cookies = Array.isArray(cookieHeader)
+        ? cookieHeader
+        : cookieHeader
+          ? [cookieHeader]
+          : [];
+      const accessCookie = cookies.find((cookie) =>
+        cookie.startsWith('autoapply_access='),
+      );
+      expect(accessCookie).toContain('HttpOnly');
+
+      await request(app.getHttpServer())
+        .get('/v1/users/me')
+        .set('Cookie', accessCookie?.split(';')[0] ?? '')
+        .expect(200);
+    });
+
+    it('should deny regular users access to admin endpoints', async () => {
+      const tokens = await createVerifiedUserAndLogin(
+        app.getHttpServer(),
+        otpDelivery,
+        'regular-user@example.com',
+        '+919999999995',
+      );
+
+      await request(app.getHttpServer())
+        .get('/v1/admin/overview')
+        .set('Authorization', `Bearer ${tokens.access_token}`)
+        .expect(403);
+    });
+
     it('should revoke refresh tokens on logout', async () => {
       const tokens = await createVerifiedUserAndLogin(
         app.getHttpServer(),

@@ -20,6 +20,8 @@ import { validate } from './common/config/configuration';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { MetricsModule } from './modules/metrics/metrics.module';
     ApplicationsModule,
     ReferralsModule,
     MetricsModule,
+    AdminModule,
+    DashboardModule,
   ],
   providers: [
     PrismaService,

@@ -36,9 +36,31 @@ export class ApplicationRepository {
     userId: string,
     state: ApplicationState | undefined,
     limit: number,
+    query?: string,
   ): Promise<Application[]> {
     return this.prisma.application.findMany({
-      where: { userId, ...(state ? { state } : {}) },
+      where: {
+        userId,
+        ...(state ? { state } : {}),
+        ...(query?.trim()
+          ? {
+              OR: [
+                {
+                  companyName: {
+                    contains: query.trim(),
+                    mode: 'insensitive' as const,
+                  },
+                },
+                {
+                  jobTitle: {
+                    contains: query.trim(),
+                    mode: 'insensitive' as const,
+                  },
+                },
+              ],
+            }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });

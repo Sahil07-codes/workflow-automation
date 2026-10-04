@@ -10,7 +10,10 @@
   ],
   "scripts": {
     "dev": "pnpm -r --filter=./apps/api dev",
-    "build": "pnpm -r build",
+    "dev:client": "npm --prefix frontend run dev",
+    "dev:admin": "npm --prefix frontend/admin-console run dev",
+    "build": "pnpm -r build && npm --prefix frontend run build && npm --prefix frontend/admin-console run build",
+    "build:frontends": "npm --prefix frontend run build && npm --prefix frontend/admin-console run build",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "test:unit": "pnpm -r test --testPathPattern=spec.ts",
     "test:e2e": "pnpm -r test:e2e",

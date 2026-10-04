@@ -17,12 +17,8 @@ export class JobsService {
       where: { user_id: userId },
     });
 
-    if (!userPrefs) {
-      throw new NotFoundException('User preferences not found');
-    }
-
     // Apply min_match_score from user preferences
-    const effectiveMinScore = query.minMatchScore ?? userPrefs.min_match_score;
+    const effectiveMinScore = query.minMatchScore ?? userPrefs?.min_match_score ?? 60;
 
     // Fetch jobs
     const { jobs, cursor, hasMore } = await this.jobsRepository.findJobsForUser(userId, query);

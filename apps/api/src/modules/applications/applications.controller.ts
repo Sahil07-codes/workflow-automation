@@ -62,6 +62,9 @@ export class ApplicationsController {
       id: application.id,
       job_id: application.jobId,
       state: application.state,
+      approval_eligible: application.state === 'AWAITING_APPROVAL',
+      stale: false,
+      expired: false,
       form_schema: application.formSchema,
       unknown_fields: application.unknownFields,
       screenshot_url: screenshotUrl,
@@ -84,11 +87,13 @@ export class ApplicationsController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('state') state?: ApplicationState,
     @Query('limit') limit?: string,
+    @Query('q') query?: string,
   ) {
     const applications = await this.applications.listApplications(
       user.id,
       state,
       limit === undefined ? 50 : Number(limit),
+      query,
     );
     return {
       count: applications.length,
@@ -96,6 +101,9 @@ export class ApplicationsController {
         id: application.id,
         job_id: application.jobId,
         state: application.state,
+        approval_eligible: application.state === 'AWAITING_APPROVAL',
+        stale: false,
+        expired: false,
         company_name: application.companyName,
         job_title: application.jobTitle,
         created_at: application.createdAt,

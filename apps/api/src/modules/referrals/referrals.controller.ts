@@ -24,6 +24,12 @@ export class ReferralsController {
 
   // ============ REFERRAL MANAGEMENT (3) ============
 
+  @Get('referrals')
+  @UseGuards(JwtAuthGuard)
+  async getReferralOverview(@CurrentUser() user: { id: string }) {
+    return this.referralService.getReferralStats(user.id);
+  }
+
   @Get('referrals/me')
   @UseGuards(JwtAuthGuard)
   async getReferralStats(@CurrentUser() user: { id: string }) {

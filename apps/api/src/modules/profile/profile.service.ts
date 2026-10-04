@@ -16,7 +16,12 @@ export class ProfileService {
     });
 
     if (!profile) {
-      throw new AppException('PROFILE_NOT_FOUND', 'Profile not found.', 404);
+      return {
+        user_id: userId,
+        data: {},
+        version: 0,
+        confirmed_at: null,
+      };
     }
 
     // Decrypt the profile data

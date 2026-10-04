@@ -106,6 +106,7 @@ export type ConfirmProfileRequest = z.infer<typeof ConfirmProfileRequestSchema>;
 export const JobPreferencesSchema = z.object({
   roles: z.array(z.string().min(1)).min(1),
   locations: z.array(z.string().min(1)).min(1),
+  skills: z.array(z.string().min(1).max(100)).max(100).default([]),
   remote_preference: z.enum(['ONSITE', 'HYBRID', 'REMOTE']).optional(),
   min_salary_inr: z.number().int().min(0).optional(),
   max_salary_inr: z.number().int().optional(),
