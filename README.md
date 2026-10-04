@@ -53,7 +53,13 @@ pnpm --filter @autoapply/worker exec playwright install chromium
 ```
 
 ### 6. Run the API and workers
-In separate terminals:
+To start the complete local product in one terminal, including Docker services, local database migrations, API, worker, customer app, and admin console:
+```bash
+pnpm run dev:all
+```
+The local launcher refuses production mode and remote database, Redis, or S3 URLs before it applies migrations. Press `Ctrl+C` to stop the app processes; Docker services remain running. Stop those separately with `pnpm run docker:down`.
+
+Alternatively, run services in separate terminals:
 ```bash
 pnpm --filter @autoapply/api dev
 pnpm --filter @autoapply/worker dev
@@ -61,7 +67,11 @@ npm --prefix frontend run dev
 npm --prefix frontend/admin-console run dev
 ```
 
-The API listens on `http://localhost:3000` (routes under `/v1`). The customer client runs on `http://localhost:5173`; the independently built admin console runs on `http://127.0.0.1:5180`. Both frontends use `VITE_API_BASE_URL=http://localhost:3000/v1` by default and can be configured independently for deployment. The worker runs discovery, Phase 5 application, and Phase 6 referral-reward queues.
+The API listens on `http://localhost:3000` (routes under `/v1`). The customer client runs on `http://localhost:5173`; the independently built admin console runs on `http://127.0.0.1:5180`. Both frontends use `VITE_API_BASE_URL=http://localhost:3000/v1` by default and can be configured independently for deployment. The worker runs discovery, application, referral-reward, job-intake, and resume-processing queues.
+
+The customer app supports job-link intake (`POST /v1/jobs/links`), PDF resume upload (`POST /v1/resumes`), and owner-scoped in-app notifications (`GET /v1/notifications`). Users can review/delete uploaded resumes and preview extracted text through authenticated, owner-scoped endpoints. Job-link processing fetches public HTTPS pages only, validates DNS results and every redirect, and enforces response size and timeout limits. Resume PDFs are limited to 10 MB and 50 pages; uploads and extracted text are encrypted with the user's data key, and scanned-image PDFs without selectable text are not supported. Both background queues require the worker process to be running. For production, deploy and monitor the worker separately with access to Redis, S3, KMS, and PostgreSQL; the ECS API task alone does not run these background jobs.
+
+For local signup verification, the default `OTP_TRANSPORT=console` prints email codes to the API terminal; it does not send mail or SMS. To deliver email OTPs to Gmail, use a Gmail App Password (not the account password), set `OTP_TRANSPORT=smtp`, `OTP_SENDER_EMAIL` and `SMTP_USER` to the Gmail address, `SMTP_PASSWORD` to the App Password, `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, and `SMTP_SECURE=true` in `apps/api/.env`. To deliver SMS OTPs, configure `SMS_OTP_TRANSPORT=twilio` and the Twilio account SID, auth token, and sender number. Keep provider secrets only in your local ignored `.env`; never paste them into chat or commit them.
 
 ### Frontend applications
 
@@ -71,15 +81,21 @@ Build both frontends with `pnpm run build:frontends`, or build the complete work
 
 ### Production release to AWS ECS
 
-The manual `Deploy to Production` workflow can push a scanned API image to ECR and roll it out to an existing ECS service. Run it from `main` and provide a Docker-safe release version without the `v` prefix. Configure the `production` GitHub environment with:
+The Terraform root provisions the production API ECR repository, Fargate task definition/service, ALB target group and listeners, and an API-only ACM certificate validated through Route 53. It is enabled only when `environment = "prod"`. The HTTP listener redirects to HTTPS, the ALB checks `/v1/health/ready`, ECS runs tasks in private subnets, and the service has deployment rollback enabled.
+
+Before applying production Terraform, configure `route53_zone_id`, `runtime_secrets_arn`, and `cors_origin`, in addition to the existing database password and production variables. `api_domain` is set in `infra/terraform/envs/prod/prod.tfvars`. `route53_zone_id` must be the hosted zone ID itself (for example, `Z123...`, without `/hostedzone/`). `cors_origin` must be a comma-separated list of the exact HTTPS customer/admin frontend origins. The Secrets Manager secret must be a JSON object with these keys: `DATABASE_URL`, `REDIS_URL`, `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`, `OTP_PEPPER`, `OTP_SENDER_EMAIL`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `KMS_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`. Store real secret values in Secrets Manager, not Terraform source or tfvars. If the secret uses a customer-managed KMS key, also set `runtime_secrets_kms_key_arn` and allow the ECS execution role to decrypt it.
+
+Review the Terraform plan carefully before applying; use a secured remote state backend and import any existing Route 53 API record before creating the alias if one already exists. For example, supply the zone ID, runtime-secret ARN, and frontend origins as protected CI variables or securely at plan time. Terraform creates the service infrastructure, but it does not create or seed the JSON secret.
+
+After applying Terraform, the manual `Deploy to Production` workflow can push a scanned API image to ECR and roll it out to the ECS service. Run it from `main` and provide a Docker-safe release version without the `v` prefix. Configure the `production` GitHub environment with:
 
 - Secret `AWS_ROLE_TO_ASSUME`: an AWS IAM role trusted through GitHub Actions OIDC; do not use long-lived AWS access keys.
-- Variables `AWS_REGION` (defaults to `ap-south-1`), `ECR_REPOSITORY`, `ECS_CLUSTER`, and `ECS_SERVICE`.
+- Variables `AWS_REGION` (defaults to `ap-south-1`), `ECR_REPOSITORY=autoapply-api`, `ECS_CLUSTER` (from Terraform output `ecs_cluster_name`), and `ECS_SERVICE` (from Terraform output `ecs_service_name`).
 - Optional variable `ECS_CONTAINER_NAME` if the API container in the task definition is not named `api`.
 
-The IAM role needs ECR image-push access, permission to describe/register task definitions and update/describe the configured ECS service, and narrowly scoped `iam:PassRole` for that service's task and execution roles. The ECR repository, ECS cluster, active ECS service, task definition, networking, load balancer, health check, and runtime secrets must already be provisioned. Enable the ECS deployment circuit breaker with rollback on the service.
+The IAM role needs ECR image-push access, permission to describe/register task definitions and update/describe the configured ECS service, and narrowly scoped `iam:PassRole` for the task and execution roles created by Terraform. The ECR repository URL and API URL are available from Terraform outputs. The workflow also publishes a mutable `latest` image tag used by the initial task definition and tagged release images used for deployments.
 
-**Infrastructure is not yet a complete production stack.** `infra/terraform` currently scaffolds an ECS cluster and load balancer but does not create the ECR repository, ECS task definition, or ECS service; the compute module is passed `enable_ecs_service = false`. Provision those resources and configure the GitHub environment before using the workflow. The workflow does not create AWS infrastructure or migrate a production database.
+Terraform does not create or populate the runtime Secrets Manager secret, Route 53 hosted zone, GitHub environment, GitHub OIDC IAM role, or frontend hosting. Configure these and use a secured remote Terraform state backend before applying production infrastructure. The deploy workflow does not run Terraform or migrate a production database. Apply database migrations through a separately reviewed release process.
 
 For production OTP delivery, configure `OTP_TRANSPORT=ses` and a verified `OTP_SENDER_EMAIL`, plus `SMS_OTP_TRANSPORT=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and an E.164 `TWILIO_FROM_NUMBER`. Store provider credentials in the runtime secret manager. `OTP_TRANSPORT=console` is development-only and the API rejects it in production.
 

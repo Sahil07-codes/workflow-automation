@@ -132,6 +132,36 @@ variable "api_domain" {
   default     = ""  # Set in environment tfvars
 }
 
+variable "route53_zone_id" {
+  description = "Route 53 hosted zone ID for the production API domain."
+  type        = string
+  default     = ""
+}
+
+variable "runtime_secrets_arn" {
+  description = "ARN of a Secrets Manager JSON secret containing production API configuration."
+  type        = string
+  default     = ""
+}
+
+variable "runtime_secrets_kms_key_arn" {
+  description = "Optional customer-managed KMS key ARN used to encrypt the runtime secrets."
+  type        = string
+  default     = null
+}
+
+variable "api_image_tag" {
+  description = "Initial API image tag used by the ECS task definition."
+  type        = string
+  default     = "latest"
+}
+
+variable "cors_origin" {
+  description = "Comma-separated exact production customer and admin frontend origins."
+  type        = string
+  default     = ""
+}
+
 # ============ COMPUTE (ECS) ============
 variable "api_container_port" {
   description = "Container port for NestJS API"

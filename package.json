@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "dev": "pnpm -r --filter=./apps/api dev",
+    "dev:all": "node scripts/dev-all.mjs",
     "dev:client": "npm --prefix frontend run dev",
     "dev:admin": "npm --prefix frontend/admin-console run dev",
     "build": "pnpm -r build && npm --prefix frontend run build && npm --prefix frontend/admin-console run build",
@@ -26,6 +27,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "concurrently": "^10.0.5",
     "typescript": "^5.3.3"
   },
   "engines": {

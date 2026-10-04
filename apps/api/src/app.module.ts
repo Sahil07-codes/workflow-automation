@@ -22,6 +22,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { DayOneModule } from './modules/day-one/day-one.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     MetricsModule,
     AdminModule,
     DashboardModule,
+    DayOneModule,
   ],
   providers: [
     PrismaService,

@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { navigation, onboardingSteps, pages, type PageDefinition, type PageGroup } from "./data/pages";
-import { apiRequest, getDisplayableData, isApiConfigured, isRecord, resourceUrl } from "./lib/api";
+import { ApiError, apiRequest, getDisplayableData, isApiConfigured, isRecord, resourceUrl } from "./lib/api";
 import { signupApi } from "./lib/auth";
 
 const iconByName = {
@@ -45,8 +45,7 @@ function PageRoute({ page }: { page: PageDefinition }) {
   if (page.path === "/signup/mobile" || page.path === "/signup/credentials") return <Navigate to="/signup" replace />;
   if (page.path === "/signup/complete" || page.path === "/auth/google/callback") return <Navigate to="/login" replace />;
   if (page.path === "/app/applications/approval") return <Navigate to="/app/applications?state=AWAITING_APPROVAL" replace />;
-  if (page.path === "/app/jobs/submit" || page.path === "/app/resume" || page.path === "/app/notifications" ||
-      page.path.startsWith("/app/settings/security") || page.path === "/app/settings/privacy" ||
+  if (page.path.startsWith("/app/settings/security") || page.path === "/app/settings/privacy" ||
       page.path.startsWith("/app/settings/connected-accounts") || page.path.startsWith("/app/resume/tailored")) {
     return <Navigate to="/app/settings" replace />;
   }
@@ -59,6 +58,12 @@ function PageRoute({ page }: { page: PageDefinition }) {
   if (page.path === "/app/jobs/submit") {
     return <ProductLayout page={page}><JobLinkSubmissionPage /></ProductLayout>;
   }
+  if (page.path === "/app/resume") {
+    return <ProductLayout page={page}><ResumePage /></ProductLayout>;
+  }
+  if (page.path === "/app/notifications") {
+    return <ProductLayout page={page}><NotificationsPage /></ProductLayout>;
+  }
   if (page.path === "/app/referrals") {
     return <ProductLayout page={page}><ReferralPage /></ProductLayout>;
   }
@@ -70,7 +75,7 @@ function PageRoute({ page }: { page: PageDefinition }) {
   }
   return (
     <ProductLayout page={page}>
-      {page.group === "onboarding" ? <OnboardingPage page={page} /> : <ProductPage page={page} />}
+      {page.group === "onboarding" ? <OnboardingPage key={page.path} page={page} /> : <ProductPage page={page} />}
     </ProductLayout>
   );
 }
@@ -200,7 +205,12 @@ function SignupFlowPage({ page }: { page: PageDefinition }) {
           state: { targetEmail, targetMobile },
         });
       } else {
-        navigate("/login", { state: { email: targetEmail } });
+        navigate("/login", {
+          state: {
+            email: targetEmail,
+            returnTo: "/onboarding/contact",
+          },
+        });
       }
     } catch (reason) {
       setError(errorMessage(reason));
@@ -273,27 +283,48 @@ function ProductLayout({ page, children }: { page: PageDefinition; children: Rea
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
-  const [sessionState, setSessionState] = useState<"loading" | "ready" | "unauthorized">("loading");
+  const [sessionState, setSessionState] = useState<{
+    scope: "onboarding" | "workspace";
+    status: "loading" | "ready" | "onboarding-required" | "unauthorized";
+  }>({ scope: "onboarding", status: "loading" });
   const isOnboarding = page.group === "onboarding";
+  const accessScope = isOnboarding ? "onboarding" : "workspace";
+  const checkedSessionState = sessionState.scope === accessScope ? sessionState.status : "loading";
 
   useEffect(() => {
     let active = true;
+    setSessionState({ scope: accessScope, status: "loading" });
     apiRequest<unknown>("/users/me")
-      .then(() => { if (active) setSessionState("ready"); })
-      .catch(() => { if (active) setSessionState("unauthorized"); });
+      .then(() => apiRequest<unknown>("/profile"))
+      .then(({ data }) => {
+        if (!active) return;
+        setSessionState({
+          scope: accessScope,
+          status: isRecord(data) && data.confirmed_at ? "ready" : "onboarding-required",
+        });
+      })
+      .catch(() => {
+        if (active) setSessionState({ scope: accessScope, status: "unauthorized" });
+      });
     return () => { active = false; };
-  }, []);
+  }, [accessScope]);
 
   useEffect(() => {
     setMobileNavOpen(false);
     setSearchOpen(false);
   }, [location.pathname]);
 
-  if (sessionState === "loading") {
+  if (checkedSessionState === "loading") {
     return <div className="auth-page"><InlineLoading label="Checking your secure session…" /></div>;
   }
-  if (sessionState === "unauthorized") {
+  if (checkedSessionState === "unauthorized") {
     return <Navigate to="/login" replace state={{ returnTo: `${location.pathname}${location.search}` }} />;
+  }
+  if (checkedSessionState === "onboarding-required" && !isOnboarding) {
+    return <Navigate to="/onboarding/contact" replace />;
+  }
+  if (checkedSessionState === "ready" && isOnboarding) {
+    return <Navigate to="/app/dashboard" replace />;
   }
 
   return (
@@ -370,9 +401,9 @@ function OnboardingProgress({ currentPath }: { currentPath: string }) {
       <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
       <div className="step-links">
         {onboardingSteps.map((step, index) => (
-          <Link key={step.to} to={step.to} className={index === activeIndex ? "current" : ""}>
+          <span key={step.to} className={`step-item ${index === activeIndex ? "current" : index < activeIndex ? "past" : ""}`} aria-current={index === activeIndex ? "step" : undefined}>
             <span className="step-number">{index + 1}</span>{step.label}
-          </Link>
+          </span>
         ))}
       </div>
     </section>
@@ -825,6 +856,12 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
   const [error, setError] = useState("");
   const isReview = page.path === "/onboarding/review";
   const isProfessional = page.path === "/onboarding/professional";
+  const preferencesRemote = useRemoteData("/preferences", 0, isReview);
+  const reviewValues = {
+    ...getOnboardingValues(remote.data),
+    ...getOnboardingValues(preferencesRemote.data),
+  };
+  const reviewComplete = isReview && hasCompletedOnboarding(reviewValues);
 
   useEffect(() => {
     if (remote.status === "ready") setValues(getOnboardingValues(remote.data));
@@ -834,8 +871,10 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
   const missingRequired = fields.some((field) => {
     if (!field.required) return false;
     const value = values[field.key];
-    return Array.isArray(value) ? value.length === 0 : !value?.trim();
-  });
+    if (Array.isArray(value)) return value.length === 0;
+    if (typeof value !== "string" || !value.trim()) return true;
+    return field.type === "number" && !Number.isFinite(Number(value));
+  }) || (isProfessional && !values.professional_status);
   const isFirstStep = page.path === onboardingSteps[0].to;
   const previousPath = previousOnboardingPath(page.path);
   const nextPath = onboardingSteps[onboardingSteps.findIndex((step) => step.to === page.path) + 1]?.to ?? "/app/dashboard";
@@ -847,6 +886,10 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
 
   async function continueStep(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isReview && !reviewComplete) {
+      setError("Complete all required profile, preference, and privacy details before confirming your profile.");
+      return;
+    }
     if (missingRequired) {
       setError("Complete the required fields before continuing.");
       return;
@@ -882,10 +925,17 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
         const profileData = isRecord(remote.data) && isRecord(remote.data.data)
           ? remote.data.data
           : {};
-        await apiRequest<unknown>("/profile", {
-          method: isRecord(remote.data) && remote.data.version === 0 ? "POST" : "PUT",
-          body: JSON.stringify({ ...profileData, ...values }),
-        });
+        const body = JSON.stringify({ ...profileData, ...values });
+        const profileExists = isRecord(remote.data) && typeof remote.data.version === "number" && remote.data.version > 0;
+        try {
+          await apiRequest<unknown>("/profile", { method: profileExists ? "PUT" : "POST", body });
+        } catch (reason) {
+          if (!profileExists && reason instanceof ApiError && reason.status === 409) {
+            await apiRequest<unknown>("/profile", { method: "PUT", body });
+          } else {
+            throw reason;
+          }
+        }
       }
       navigate(isReview ? "/app/dashboard" : nextPath);
     } catch (reason) {
@@ -900,13 +950,13 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
       <section className="onboarding-content">
         <div className="review-guidance"><span className="guidance-icon"><ShieldCheck size={18} /></span><div><strong>Review before confirming</strong><p>Check your profile details and privacy selection. Your profile is confirmed only after the service records your review.</p></div></div>
         <RemoteState resource={resource} remote={remote} compact={false} onRetry={remote.retry} />
-        {remote.status === "ready" && remote.data != null && <DataSummary data={remote.data} />}
-        {remote.status === "ready" && remote.data != null && <ServiceActions resource={resource} data={remote.data} onComplete={remote.retry} />}
+        <RemoteState resource="/preferences" remote={preferencesRemote} compact={false} onRetry={preferencesRemote.retry} />
+        {remote.status === "ready" && preferencesRemote.status === "ready" && <OnboardingReviewSummary values={reviewValues} />}
         {error && <ErrorBanner message={error} />}
         <form className="onboarding-nav onboarding-review-nav" onSubmit={(event) => void continueStep(event)}>
-          <Link to={isFirstStep ? "/app/dashboard" : previousPath} className="button button-secondary">{isFirstStep ? <X size={15} /> : <ArrowLeft size={15} />}{isFirstStep ? "Exit setup" : "Back"}</Link>
+          <Link to={previousPath} className="button button-secondary"><ArrowLeft size={15} />Back</Link>
           <span>Your progress is saved to your account</span>
-          <button type="submit" className="button button-primary" disabled={!isApiConfigured || remote.status !== "ready" || remote.data == null || busy}>{busy ? "Confirming…" : "Confirm profile"} <ArrowRight size={15} /></button>
+          <button type="submit" className="button button-primary" disabled={!isApiConfigured || remote.status !== "ready" || preferencesRemote.status !== "ready" || !reviewComplete || busy}>{busy ? "Confirming…" : "Confirm profile"} <ArrowRight size={15} /></button>
         </form>
       </section>
     );
@@ -921,9 +971,9 @@ function OnboardingPage({ page }: { page: PageDefinition }) {
       {isProfessional && <div className="professional-choice">
         <span className="onboarding-field-label">Which best describes you? <span className="required-mark">*</span></span>
         <div className="professional-choice-options">
-          {professionalStatusOptions.map((option) => (
+          {professionalStatusOptions.map((option, index) => (
             <label className={`professional-choice-card ${values.professional_status === option.value ? "selected" : ""}`} key={option.value}>
-              <input type="radio" name="professional_status" value={option.value} checked={values.professional_status === option.value} onChange={() => {
+              <input type="radio" name="professional_status" value={option.value} required={index === 0} checked={values.professional_status === option.value} onChange={() => {
                 setValues((current) => {
                   const next: OnboardingValues = { ...current, professional_status: option.value };
                   ["education_level", "institution", "field_of_study", "graduation_year", "current_title", "years_experience", "current_company", "experience_summary"].forEach((key) => delete next[key]);
@@ -956,28 +1006,26 @@ function getOnboardingFields(path: string, professionalStatus: string | string[]
   if (path === "/onboarding/contact") return [
     { key: "full_name", label: "Full name", type: "text", required: true, placeholder: "Your name" },
     { key: "location", label: "City or region", type: "text", required: true, placeholder: "City, region, or country", hint: "A general location is enough; avoid adding a street address." },
-    { key: "linkedin_url", label: "LinkedIn profile (optional)", type: "url", placeholder: "https://www.linkedin.com/in/your-profile" },
+    { key: "linkedin_url", label: "LinkedIn profile", type: "url", required: true, placeholder: "https://www.linkedin.com/in/your-profile" },
   ];
   if (path === "/onboarding/professional") {
     if (professionalStatus === "student_recent_graduate") return [
       { key: "education_level", label: "Current or highest education level", type: "select", required: true, options: ["High school", "Diploma", "Bachelor’s", "Master’s", "Doctorate", "Other"].map((value) => ({ label: value, value })) },
       { key: "institution", label: "School or institution", type: "text", required: true, placeholder: "Institution name" },
       { key: "field_of_study", label: "Field of study", type: "text", required: true, placeholder: "e.g. Computer science" },
-      { key: "graduation_year", label: "Graduation year (optional)", type: "number", placeholder: "Year" },
-      { key: "experience_summary", label: "Internships, projects, or other experience (optional)", type: "textarea", placeholder: "Share relevant experience you’d like considered." },
+      { key: "graduation_year", label: "Graduation year", type: "number", required: true, placeholder: "Year" },
     ];
     if (professionalStatus === "experienced_professional") return [
       { key: "current_title", label: "Current or most recent job title", type: "text", required: true, placeholder: "Your role" },
       { key: "years_experience", label: "Years of professional experience", type: "select", required: true, options: ["Less than 1 year", "1–2 years", "3–5 years", "6–10 years", "More than 10 years"].map((value) => ({ label: value, value })) },
-      { key: "current_company", label: "Current or most recent company (optional)", type: "text", placeholder: "Company name" },
-      { key: "experience_summary", label: "Professional experience (optional)", type: "textarea", placeholder: "Summarize the experience most relevant to your next role." },
+      { key: "current_company", label: "Current or most recent company", type: "text", required: true, placeholder: "Company name" },
     ];
     return [];
   }
   if (path === "/onboarding/preferences") return [
     { key: "preferred_roles", label: "Roles you’re interested in", type: "textarea", required: true, placeholder: "Add job titles or role types, separated by commas." },
-    { key: "preferred_locations", label: "Preferred locations", type: "textarea", placeholder: "Add cities, regions, or countries. Leave blank if flexible." },
-    { key: "work_mode", label: "Preferred work arrangement", type: "select", options: [{ label: "Remote", value: "REMOTE" }, { label: "Hybrid", value: "HYBRID" }, { label: "On-site", value: "ONSITE" }] },
+    { key: "preferred_locations", label: "Preferred locations", type: "textarea", required: true, placeholder: "Add cities, regions, or countries." },
+    { key: "work_mode", label: "Preferred work arrangement", type: "select", required: true, options: [{ label: "Remote", value: "REMOTE" }, { label: "Hybrid", value: "HYBRID" }, { label: "On-site", value: "ONSITE" }] },
     { key: "skills", label: "Skills", type: "textarea", required: true, placeholder: "Add skills relevant to the roles you want, separated by commas." },
   ];
   if (path === "/onboarding/privacy") return [
@@ -1015,15 +1063,72 @@ function getOnboardingValues(data: unknown): OnboardingValues {
   }, {});
 }
 
+function hasCompletedOnboarding(values: OnboardingValues): boolean {
+  const hasValue = (key: string) => {
+    const value = values[key];
+    return Array.isArray(value) ? value.some((item) => item.trim().length > 0) : Boolean(value?.trim());
+  };
+  const contactComplete = ["full_name", "location", "linkedin_url"].every(hasValue);
+  const status = values.professional_status;
+  const professionalComplete = status === "student_recent_graduate"
+    ? ["education_level", "institution", "field_of_study", "graduation_year"].every(hasValue) &&
+      Number.isFinite(Number(values.graduation_year))
+    : status === "experienced_professional"
+      ? ["current_title", "years_experience", "current_company"].every(hasValue)
+      : false;
+  const preferencesComplete = ["preferred_roles", "preferred_locations", "work_mode", "skills"].every(hasValue);
+  const privacyComplete = hasValue("profile_visibility");
+  return contactComplete && professionalComplete && preferencesComplete && privacyComplete;
+}
+
+function OnboardingReviewSummary({ values }: { values: OnboardingValues }) {
+  const labels: Record<string, string> = {
+    full_name: "Full name",
+    location: "City or region",
+    linkedin_url: "LinkedIn profile",
+    professional_status: "Professional status",
+    education_level: "Education level",
+    institution: "School or institution",
+    field_of_study: "Field of study",
+    graduation_year: "Graduation year",
+    current_title: "Current or most recent job title",
+    years_experience: "Years of experience",
+    current_company: "Current or most recent company",
+    preferred_roles: "Roles of interest",
+    preferred_locations: "Preferred locations",
+    work_mode: "Work arrangement",
+    skills: "Skills",
+    profile_visibility: "Profile visibility",
+  };
+  const entries = Object.entries(labels)
+    .map(([key, label]) => {
+      const value = values[key];
+      const display = Array.isArray(value) ? value.join(", ") : value?.trim();
+      return display ? { label, value: display } : null;
+    })
+    .filter((entry): entry is { label: string; value: string } => entry !== null);
+
+  return (
+    <section className="onboarding-review-summary" aria-label="Profile details to review">
+      <div className="onboarding-review-heading"><span className="eyebrow">Your completed details</span><h2>Review your profile</h2></div>
+      {entries.length > 0 ? (
+        <dl>{entries.map((entry) => <div className="onboarding-review-item" key={entry.label}><dt>{entry.label}</dt><dd>{entry.value}</dd></div>)}</dl>
+      ) : (
+        <p>No profile details have been saved yet. Go back and complete each setup step.</p>
+      )}
+    </section>
+  );
+}
+
 function OnboardingFieldControl({ field, value, onChange }: { field: OnboardingField; value: string | string[]; onChange: (value: string | string[]) => void }) {
   const id = `onboarding-${field.key}`;
   const requiredMark = field.required ? <span className="required-mark"> *</span> : null;
   if (field.type === "radio") return (
     <fieldset className="onboarding-field onboarding-radio-field">
       <legend className="onboarding-field-label">{field.label}{requiredMark}</legend>
-      <div className="onboarding-radio-options">{field.options?.map((option) => (
+      <div className="onboarding-radio-options">{field.options?.map((option, index) => (
         <label className={`onboarding-radio-card ${value === option.value ? "selected" : ""}`} key={option.value}>
-          <input type="radio" name={field.key} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+          <input type="radio" name={field.key} value={option.value} required={field.required && index === 0} checked={value === option.value} onChange={() => onChange(option.value)} />
           <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
           {value === option.value && <Check size={17} />}
         </label>
@@ -1035,7 +1140,7 @@ function OnboardingFieldControl({ field, value, onChange }: { field: OnboardingF
     const selected = Array.isArray(value) ? value : [];
     return <fieldset className="onboarding-field onboarding-checkbox-field"><legend className="onboarding-field-label">{field.label}{requiredMark}</legend><div className="onboarding-checkbox-options">{field.options?.map((option) => <label key={option.value}><input type="checkbox" checked={selected.includes(option.value)} onChange={(event) => onChange(event.target.checked ? [...selected, option.value] : selected.filter((item) => item !== option.value))} /><span>{option.label}</span></label>)}</div>{field.hint && <small className="onboarding-field-hint">{field.hint}</small>}</fieldset>;
   }
-  return <div className={`onboarding-field ${field.type === "textarea" ? "onboarding-field-wide" : ""}`}><label className="onboarding-field-label" htmlFor={id}>{field.label}{requiredMark}</label>{field.type === "textarea" ? <textarea id={id} rows={4} value={Array.isArray(value) ? "" : value} placeholder={field.placeholder} onChange={(event) => onChange(event.target.value)} /> : field.type === "select" ? <select id={id} value={Array.isArray(value) ? "" : value} onChange={(event) => onChange(event.target.value)}><option value="">Choose an option</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input id={id} type={field.type} value={Array.isArray(value) ? "" : value} placeholder={field.placeholder} onChange={(event) => onChange(event.target.value)} />}{field.hint && <small className="onboarding-field-hint">{field.hint}</small>}</div>;
+  return <div className={`onboarding-field ${field.type === "textarea" ? "onboarding-field-wide" : ""}`}><label className="onboarding-field-label" htmlFor={id}>{field.label}{requiredMark}</label>{field.type === "textarea" ? <textarea id={id} rows={4} required={field.required} value={Array.isArray(value) ? "" : value} placeholder={field.placeholder} onChange={(event) => onChange(event.target.value)} /> : field.type === "select" ? <select id={id} required={field.required} value={Array.isArray(value) ? "" : value} onChange={(event) => onChange(event.target.value)}><option value="">Choose an option</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <input id={id} type={field.type} required={field.required} min={field.type === "number" ? "1950" : undefined} max={field.key === "graduation_year" ? String(new Date().getFullYear() + 10) : undefined} value={Array.isArray(value) ? "" : value} placeholder={field.placeholder} onChange={(event) => onChange(event.target.value)} />}{field.hint && <small className="onboarding-field-hint">{field.hint}</small>}</div>;
 }
 
 function ReferralPage() {
@@ -1279,6 +1384,8 @@ function JobLinkSubmissionPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [submittedCount, setSubmittedCount] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const intakes = useRemoteData<unknown>("/jobs/intakes", refreshKey);
   const entries = useMemo(() => {
     const lines = text.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
     const seen = new Set<string>();
@@ -1321,6 +1428,7 @@ function JobLinkSubmissionPage() {
       });
       setSubmittedCount(entries.length);
       setText("");
+      setRefreshKey((key) => key + 1);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -1396,7 +1504,179 @@ function JobLinkSubmissionPage() {
         <div><span className="guidance-icon"><ShieldCheck size={18} /></span><div><strong>You stay in control</strong><p>The service can prepare applications from these roles. You’ll review details and approve before anything is submitted.</p></div></div>
         <div><span className="guidance-icon"><Globe2 size={18} /></span><div><strong>Use the direct job posting</strong><p>Paste the job’s page URL from the employer or job board. Sign-in-only or expired links may not be accessible to the service.</p></div></div>
       </aside>
+      <section className="data-summary">
+        <div className="data-summary-head"><span className="eyebrow">Your submitted job links</span><button className="button button-secondary button-small" type="button" onClick={() => setRefreshKey((key) => key + 1)}>Refresh status</button></div>
+        <RemoteState resource="/jobs/intakes" remote={intakes} compact={false} />
+        {intakes.status === "ready" && Array.isArray(intakes.data) && intakes.data.length > 0 && (
+          <div className="data-record-list">{intakes.data.map((value, index) => {
+            const intake = isRecord(value) ? value : {};
+            const status = typeof intake.status === "string" ? intake.status : "UNKNOWN";
+            return <div className="data-record" key={typeof intake.id === "string" ? intake.id : index}>
+              <strong>{typeof intake.url === "string" ? intake.url : "Job link"}</strong>
+              <span className={`status-tag ${status === "COMPLETED" ? "status-green" : status === "FAILED" ? "status-amber" : "status-blue"}`}>{status.toLowerCase().replace(/_/g, " ")}</span>
+              {typeof intake.error === "string" && intake.error && <small>{intake.error}</small>}
+              {typeof intake.jobId === "string" && <Link to={`/app/jobs/${encodeURIComponent(intake.jobId)}`}>Review job <ArrowRight size={14} /></Link>}
+            </div>;
+          })}</div>
+        )}
+      </section>
     </div>
+  );
+}
+
+function ResumePage() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState("");
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const resumes = useRemoteData<unknown>("/resumes", refreshKey);
+
+  async function upload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const selected = form.elements.namedItem("resume");
+    const file = selected instanceof HTMLInputElement ? selected.files?.[0] : undefined;
+    setError("");
+    setSuccess("");
+    if (!file) {
+      setError("Choose a PDF resume to upload.");
+      return;
+    }
+    const body = new FormData();
+    body.append("file", file);
+    setBusy(true);
+    try {
+      await apiRequest<unknown>("/resumes", { method: "POST", body });
+      setSuccess("Resume uploaded securely. Text extraction is processing in the background.");
+      form.reset();
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function togglePreview(id: string) {
+    if (Object.prototype.hasOwnProperty.call(previews, id)) {
+      setPreviews((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    setError("");
+    setPreviewBusy(id);
+    try {
+      const { data } = await apiRequest<{ text: string }>(`/resumes/${encodeURIComponent(id)}/preview`);
+      setPreviews((current) => ({ ...current, [id]: data.text }));
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setPreviewBusy("");
+    }
+  }
+
+  async function deleteResume(id: string, fileName: string) {
+    if (!window.confirm(`Permanently delete ${fileName} and its encrypted stored file?`)) return;
+    setError("");
+    try {
+      await apiRequest<unknown>(`/resumes/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setPreviews((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  return (
+    <div className="job-link-page">
+      <section className="job-link-panel">
+        <div className="job-link-panel-heading"><span className="job-link-symbol"><FileText size={22} /></span><div><span className="eyebrow">Private and encrypted</span><h2>Upload your resume</h2><p>Upload a PDF up to 10 MB. We encrypt the file before storage and extract selectable text to prepare applications.</p></div></div>
+        <form className="auth-form" onSubmit={(event) => void upload(event)}>
+          <label htmlFor="resume-upload">PDF resume</label>
+          <input id="resume-upload" name="resume" type="file" accept="application/pdf,.pdf" required />
+          {error && <ErrorBanner message={error} />}
+          {success && <div className="inline-notice" role="status"><Check size={16} />{success}</div>}
+          <button className="button button-primary" type="submit" disabled={busy || !isApiConfigured}>{busy ? <><span className="spinner" /> Uploading…</> : <>Upload resume <ArrowRight size={16} /></>}</button>
+        </form>
+      </section>
+      <section className="data-summary">
+        <div className="data-summary-head"><span className="eyebrow">Processing status</span><button className="button button-secondary button-small" type="button" onClick={() => setRefreshKey((key) => key + 1)}>Refresh</button></div>
+        <RemoteState resource="/resumes" remote={resumes} compact={false} />
+        {resumes.status === "ready" && Array.isArray(resumes.data) && resumes.data.length > 0 && (
+          <div className="data-record-list">{resumes.data.map((value, index) => {
+            const resume = isRecord(value) ? value : {};
+            const status = typeof resume.status === "string" ? resume.status : "UNKNOWN";
+            const id = typeof resume.id === "string" ? resume.id : "";
+            return <div className="data-record" key={id || index}>
+              <strong>{typeof resume.fileName === "string" ? resume.fileName : "Resume"}</strong>
+              <span className={`status-tag ${status === "READY" ? "status-green" : status === "FAILED" ? "status-amber" : "status-blue"}`}>{status.toLowerCase()}</span>
+              {typeof resume.pageCount === "number" && <small>{resume.pageCount} pages · text extracted</small>}
+              {typeof resume.error === "string" && resume.error && <small>{resume.error}</small>}
+              {id && <div className="notification-actions">
+                {status === "READY" && <button className="button button-secondary button-small" type="button" onClick={() => void togglePreview(id)} disabled={previewBusy === id}>{previewBusy === id ? "Loading…" : Object.prototype.hasOwnProperty.call(previews, id) ? "Hide extracted text" : "Preview extracted text"}</button>}
+                <button className="button button-secondary button-small" type="button" onClick={() => void deleteResume(id, typeof resume.fileName === "string" ? resume.fileName : "this resume")}>Delete</button>
+              </div>}
+              {id && Object.prototype.hasOwnProperty.call(previews, id) && <pre className="resume-preview">{previews[id]}</pre>}
+            </div>;
+          })}</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function NotificationsPage() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState("");
+  const notifications = useRemoteData<unknown>("/notifications", refreshKey);
+
+  async function markRead(id?: string) {
+    setError("");
+    try {
+      await apiRequest<unknown>(id ? `/notifications/${encodeURIComponent(id)}/read` : "/notifications/read-all", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  const payload = isRecord(notifications.data) ? notifications.data : {};
+  const items = Array.isArray(payload.notifications) ? payload.notifications : [];
+  return (
+    <section className="data-summary">
+      <div className="data-summary-head"><span className="eyebrow">{typeof payload.unreadCount === "number" ? `${payload.unreadCount} unread` : "Updates for your account"}</span><button className="button button-secondary button-small" type="button" onClick={() => void markRead()}>Mark all as read</button></div>
+      {error && <ErrorBanner message={error} />}
+      <RemoteState resource="/notifications" remote={notifications} compact={false} />
+      {notifications.status === "ready" && items.length === 0 && <div className="resource-empty"><span className="empty-icon"><MessageSquareText size={18} /></span><span><strong>You’re all caught up</strong><small>Job link and resume processing updates will appear here.</small></span></div>}
+      {notifications.status === "ready" && items.length > 0 && (
+        <div className="data-record-list">{items.map((value, index) => {
+          const item = isRecord(value) ? value : {};
+          const id = typeof item.id === "string" ? item.id : "";
+          const path = typeof item.resourcePath === "string" && item.resourcePath.startsWith("/app/") ? item.resourcePath : "";
+          const read = item.readAt !== null && item.readAt !== undefined;
+          return <article className={`data-record ${read ? "notification-read" : "notification-unread"}`} key={id || index}>
+            <strong>{typeof item.title === "string" ? item.title : "Account update"}</strong>
+            <small>{typeof item.message === "string" ? item.message : ""}</small>
+            <div className="notification-actions">
+              {path && <Link to={path}>View details <ArrowRight size={14} /></Link>}
+              {!read && id && <button className="button button-secondary button-small" type="button" onClick={() => void markRead(id)}>Mark as read</button>}
+            </div>
+          </article>;
+        })}</div>
+      )}
+    </section>
   );
 }
 
@@ -1494,20 +1774,20 @@ function ProductPage({ page }: { page: PageDefinition }) {
   );
 }
 
-function useRemoteData<T = unknown>(resource: string, refreshKey = 0) {
+function useRemoteData<T = unknown>(resource: string, refreshKey = 0, enabled = true) {
   const [state, setState] = useState<{ status: "loading" | "ready" | "error"; data: T | null; error?: string }>({
-    status: isApiConfigured ? "loading" : "ready",
+    status: isApiConfigured && enabled ? "loading" : "ready",
     data: null,
   });
 
   const load = useCallback(() => {
-    if (!isApiConfigured || !resource) {
+    if (!isApiConfigured || !resource || !enabled) {
       setState({ status: "ready", data: null });
       return;
     }
     setState({ status: "loading", data: null });
     apiRequest<T>(resource).then(({ data }) => setState({ status: "ready", data })).catch((reason: unknown) => setState({ status: "error", data: null, error: errorMessage(reason) }));
-  }, [resource]);
+  }, [enabled, resource]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
   return { ...state, retry: load };

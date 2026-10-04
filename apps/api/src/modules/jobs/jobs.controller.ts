@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, HttpCode } from '@nestjs/common';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { jobListQuerySchema } from '@autoapply/shared';
 import { JobsService } from './jobs.service';
+import { DayOneService } from '../day-one/day-one.service';
 
 /**
  * JobsController - read-facing API for job discovery
@@ -10,7 +11,10 @@ import { JobsService } from './jobs.service';
  */
 @Controller('jobs')
 export class JobsController {
-  constructor(private jobsService: JobsService) {}
+  constructor(
+    private jobsService: JobsService,
+    private readonly dayOne: DayOneService,
+  ) {}
 
   /**
    * GET /jobs - list jobs with filters and pagination
@@ -47,6 +51,12 @@ export class JobsController {
       user.id,
       this.parseListQuery({ ...rawQuery, status: 'OPEN' }),
     );
+  }
+
+  @Get('intakes')
+  @HttpCode(200)
+  async listJobIntakes(@CurrentUser() user: { id: string }) {
+    return this.dayOne.listJobIntakes(user.id);
   }
 
   /**

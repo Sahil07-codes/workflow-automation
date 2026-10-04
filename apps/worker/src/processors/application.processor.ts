@@ -10,6 +10,7 @@ import {
 import { openBuffer, generateDek, sealBuffer, unwrapDek, wrapDek } from '@autoapply/crypto';
 import { Job, Queue, Worker } from 'bullmq';
 import { chromium, Page } from 'playwright';
+import { assertPublicHostname, isPublicIp } from './day-one.processor';
 
 const PREPARE_QUEUE = 'application-prepare';
 const SUBMIT_QUEUE = 'application-submit';
@@ -218,6 +219,17 @@ async function prepareApplication(
         },
       },
     });
+    await notifyApplicationState(
+      prisma,
+      application.id,
+      state,
+      state === 'NEEDS_INPUT'
+        ? 'Application needs your input'
+        : 'Application ready for review',
+      state === 'NEEDS_INPUT'
+        ? `${application.jobTitle} at ${application.companyName} needs information from you before it can be reviewed.`
+        : `${application.jobTitle} at ${application.companyName} is ready for your approval.`,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown form preparation error';
     const code =
@@ -238,6 +250,13 @@ async function prepareApplication(
           payload: { errorCode: code, errorMessage: message.slice(0, 1000) },
         },
       });
+      await notifyApplicationState(
+        prisma,
+        application.id,
+        'FAILED',
+        'Application preparation failed',
+        `We could not prepare ${application.jobTitle} at ${application.companyName}. Review the application for details.`,
+      );
     }
     throw error;
   } finally {
@@ -309,6 +328,13 @@ async function submitApplication(
       await prisma.applicationEvent.create({
         data: { applicationId: application.id, eventType: 'FORM_CHANGED' },
       });
+      await notifyApplicationState(
+        prisma,
+        application.id,
+        'NEEDS_INPUT',
+        'Application needs your input',
+        `The employer's form changed for ${application.jobTitle} at ${application.companyName}. Review it before continuing.`,
+      );
       return;
     }
 
@@ -358,6 +384,13 @@ async function submitApplication(
         await prisma.applicationEvent.create({
           data: { applicationId: application.id, eventType: 'FORM_VALIDATION_ERROR' },
         });
+        await notifyApplicationState(
+          prisma,
+          application.id,
+          'NEEDS_INPUT',
+          'Application needs your input',
+          `The employer requested changes to information for ${application.jobTitle} at ${application.companyName}.`,
+        );
         return;
       }
       throw new ApplicationProcessingError(
@@ -377,6 +410,13 @@ async function submitApplication(
         nextRetryAt: null,
       },
     });
+    await notifyApplicationState(
+      prisma,
+      application.id,
+      'SUBMITTED',
+      'Application submitted',
+      `Your application for ${application.jobTitle} at ${application.companyName} was submitted. Confirmation tracking will continue.`,
+    );
     try {
       const submittedScreenshot = await screenshots.upload(
         application.userId,
@@ -429,6 +469,7 @@ async function submitApplication(
       });
       console.error(`Could not schedule ATS confirmation for ${application.id}: ${message}`);
     }
+
   } catch (error) {
     const failure =
       error instanceof ApplicationProcessingError
@@ -563,6 +604,13 @@ async function confirmApplication(
           payload: { ats: 'greenhouse', stage: status.stage ?? null },
         },
       });
+      await notifyApplicationState(
+        prisma,
+        application.id,
+        'CONFIRMED',
+        'Application confirmed',
+        `The employer confirmed your application for ${application.jobTitle} at ${application.companyName}.`,
+      );
       return;
     }
 
@@ -589,6 +637,39 @@ async function confirmApplication(
         jobId: `confirm-${application.id}-${checkCount}`,
         removeOnComplete: 500,
       },
+    );
+  }
+}
+
+async function notifyApplicationState(
+  prisma: PrismaClient,
+  applicationId: string,
+  state: string,
+  title: string,
+  message: string,
+): Promise<void> {
+  try {
+    const application = await prisma.application.findUnique({
+      where: { id: applicationId },
+      select: { userId: true },
+    });
+    if (!application) return;
+    await prisma.notification.upsert({
+      where: { dedupeKey: `application:${applicationId}:${state}` },
+      create: {
+        userId: application.userId,
+        kind: `APPLICATION_${state}`,
+        title,
+        message,
+        resourcePath: `/app/applications/${applicationId}`,
+        dedupeKey: `application:${applicationId}:${state}`,
+      },
+      update: {},
+    });
+  } catch (error) {
+    console.error(
+      `Could not create ${state} notification for application ${applicationId}:`,
+      error,
     );
   }
 }
@@ -696,13 +777,40 @@ async function openApplicationPage(applyUrl: string): Promise<Page> {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
-  const context = await browser.newContext();
+  const context = await browser.newContext({ serviceWorkers: 'block' });
   const page = await context.newPage();
+  let blockedRequestHost: string | undefined;
   try {
+    await context.route('**/*', async (route) => {
+      const requestUrl = route.request().url();
+      if (/^(?:data|blob|about):/i.test(requestUrl)) {
+        await route.continue();
+        return;
+      }
+      try {
+        assertPublicHttpUrl(requestUrl);
+        await assertPublicHostname(new URL(requestUrl).hostname);
+      } catch {
+        try {
+          blockedRequestHost = new URL(requestUrl).hostname || 'unknown';
+        } catch {
+          blockedRequestHost = 'unknown';
+        }
+        await route.abort('blockedbyclient');
+        return;
+      }
+      await route.continue();
+    });
     const response = await page.goto(applyUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
+    if (blockedRequestHost) {
+      throw new ApplicationProcessingError(
+        'PRIVATE_RESOURCE_BLOCKED',
+        'The employer page attempted to access a private or restricted network resource.',
+      );
+    }
     assertPublicHttpUrl(page.url());
     if (!response?.ok()) {
       const status = response?.status();
@@ -727,6 +835,13 @@ async function openApplicationPage(applyUrl: string): Promise<Page> {
   } catch (error) {
     await context.close();
     await browser.close();
+    if (blockedRequestHost) {
+      console.warn(`Blocked a private or restricted application request to ${blockedRequestHost}`);
+      throw new ApplicationProcessingError(
+        'PRIVATE_RESOURCE_BLOCKED',
+        'The employer page attempted to access a private or restricted network resource.',
+      );
+    }
     throw error;
   }
 }
@@ -1226,27 +1341,10 @@ function assertPublicHttpUrl(value: string): void {
     host.endsWith('.localhost') ||
     host.endsWith('.local') ||
     host.endsWith('.internal') ||
-    isPrivateIp(host)
+    (isIP(host) !== 0 && !isPublicIp(host))
   ) {
     throw new ApplicationProcessingError('INVALID_URL', 'Private network URLs are not allowed');
   }
-}
-
-function isPrivateIp(host: string): boolean {
-  const version = isIP(host);
-  if (version === 4) {
-    const [first, second] = host.split('.').map(Number);
-    return (
-      first === 0 ||
-      first === 10 ||
-      first === 127 ||
-      first === 169 && second === 254 ||
-      first === 172 && second >= 16 && second <= 31 ||
-      first === 192 && second === 168 ||
-      first >= 224
-    );
-  }
-  return version === 6 && (host === '::1' || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80'));
 }
 
 function redisConnectionOptions(redisUrl: string) {

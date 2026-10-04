@@ -75,6 +75,9 @@ model User {
   payments          Payment[]
   jobMatches        JobMatch[]
   applications      Application[]
+  jobIntakes        JobIntake[]
+  resumes           Resume[]
+  notifications     Notification[]
   referralsSent     referrals[]     @relation("ReferralReferrer")
   referralsReceived referrals?      @relation("ReferralReferee")
   wallet            wallets?
@@ -228,6 +231,7 @@ model Job {
   rawData        Json?                        @map("raw_data")
   jobMatches     JobMatch[]
   applications   Application[]
+  intakes        JobIntake[]
 
   @@unique([source, externalId])
   @@index([canonicalUrl])
@@ -235,6 +239,63 @@ model Job {
   @@index([status])
   @@index([lastSeen])
   @@map("jobs")
+}
+
+model JobIntake {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  url       String
+  status    String   @default("PENDING")
+  jobId     String?  @map("job_id") @db.Uuid
+  error     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job?  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, url])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("job_intakes")
+}
+
+model Resume {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  fileName         String    @map("file_name")
+  contentType      String    @map("content_type")
+  objectKey        String    @unique @map("object_key")
+  sizeBytes        Int       @map("size_bytes")
+  status           String    @default("PROCESSING")
+  extractedTextEnc Bytes?    @map("extracted_text_enc")
+  pageCount        Int?      @map("page_count")
+  error            String?
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("resumes")
+}
+
+model Notification {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  kind         String
+  title        String
+  message      String
+  resourcePath String?   @map("resource_path")
+  dedupeKey    String?   @unique @map("dedupe_key")
+  readAt       DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
 }
 
 model JobMatch {

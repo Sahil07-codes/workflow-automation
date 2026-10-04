@@ -8,6 +8,7 @@ import { resolve } from 'path';
 import { createDiscoveryProcessor, DiscoveryProcessor } from './processors/discovery.processor';
 import { createDiscoverySweepScheduler, DiscoverySweepScheduler } from './scheduler/discovery-sweep.scheduler';
 import { ApplicationWorkers, createApplicationWorkers } from './processors/application.processor';
+import { createDayOneWorkers } from './processors/day-one.processor';
 
 const projectRoot = resolve(__dirname, '../../../');
 loadEnv({ path: resolve(projectRoot, 'apps/api/.env') });
@@ -18,6 +19,7 @@ const prisma = new PrismaClient();
 let processor: DiscoveryProcessor | undefined;
 let scheduler: DiscoverySweepScheduler | undefined;
 let applicationWorkers: ApplicationWorkers | undefined;
+let dayOneWorkers: ReturnType<typeof createDayOneWorkers> | undefined;
 let shuttingDown = false;
 
 async function shutdown(): Promise<void> {
@@ -27,6 +29,7 @@ async function shutdown(): Promise<void> {
     processor?.stop(),
     scheduler?.stop(),
     applicationWorkers?.stop(),
+    dayOneWorkers?.stop(),
   ]);
   await prisma.$disconnect();
 }
@@ -41,7 +44,9 @@ async function bootstrap() {
     await scheduler.start();
     applicationWorkers = createApplicationWorkers(redisUrl, prisma);
     await applicationWorkers.start();
-    console.log('Discovery and application workers are running');
+    dayOneWorkers = createDayOneWorkers(redisUrl, prisma);
+    await dayOneWorkers.start();
+    console.log('Discovery, application, intake, and resume workers are running');
   } catch (error) {
     console.error('Discovery worker startup failed:', error);
     await shutdown();

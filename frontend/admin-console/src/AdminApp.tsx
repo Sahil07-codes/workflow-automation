@@ -156,7 +156,13 @@ function useResource(path: string, refreshKey = 0): FetchState {
     adminFetch(path)
       .then(async (response) => {
         const body: unknown = response.status === 204 ? null : await response.json();
-        if (!response.ok) throw new Error(isRecord(body) && typeof body.message === "string" ? body.message : `Admin service returned ${response.status}.`);
+          if (response.status === 401) {
+            throw new Error("You are not signed in. Sign in through the customer app at http://localhost:5173, then reload this console using localhost (not 127.0.0.1).");
+          }
+          if (response.status === 403) {
+            throw new Error("This signed-in account does not have ADMIN or SUPERADMIN access. Regular signup accounts cannot access administrative data.");
+          }
+          if (!response.ok) throw new Error(isRecord(body) && typeof body.message === "string" ? body.message : `Admin service returned ${response.status}.`);
         return body;
       })
       .then((data) => { if (active) setState({ loading: false, data, error: "" }); })

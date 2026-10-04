@@ -1,5 +1,4 @@
-# AutoApply AWS Infrastructure as Code
-# Phase 0-2: Foundation, Authentication, Profile
+# AutoApply AWS infrastructure: networking, data services, and production ECS API
 
 terraform {
   required_version = ">= 1.0"
@@ -10,8 +9,7 @@ terraform {
     }
   }
 
-  # Backend configuration moved to envs/*/backend.tf for environment-specific state
-  # This allows separate state per environment while keeping main.tf generic
+  # Configure a secured remote backend before applying production infrastructure.
 }
 
 provider "aws" {
@@ -44,6 +42,7 @@ module "network" {
   private_subnet_cidrs   = var.private_subnet_cidrs
   data_subnet_cidrs      = var.data_subnet_cidrs
   restricted_subnet_cidr = var.restricted_subnet_cidr
+  api_container_port     = var.api_container_port
 }
 
 # ============ DATABASE ============
@@ -68,13 +67,12 @@ module "database" {
 module "cache" {
   source = "./modules/cache"
 
-  project_name              = var.project_name
-  environment               = var.environment
-  redis_node_type           = var.redis_node_type
-  redis_num_cache_clusters  = var.redis_num_cache_clusters
-  vpc_id                    = module.network.vpc_id
-  cache_subnet_group_id     = module.network.cache_subnet_group_id
-  cache_security_group_id   = module.network.cache_security_group_id
+  project_name               = var.project_name
+  environment                = var.environment
+  redis_node_type            = var.redis_node_type
+  redis_num_cache_clusters   = var.redis_num_cache_clusters
+  cache_subnet_group_id      = module.network.cache_subnet_group_id
+  cache_security_group_id    = module.network.cache_security_group_id
   automatic_failover_enabled = var.redis_automatic_failover
 }
 
@@ -88,30 +86,55 @@ module "storage" {
   kms_key_description = "KMS key for AutoApply ${var.environment}"
 }
 
-# ============ COMPUTE (ECS) ============
-# Scaffolded for Phase 3; minimal until then
+# ============ COMPUTE (ECS CLUSTER AND LOAD BALANCER) ============
 module "compute" {
   source = "./modules/compute"
 
-  project_name       = var.project_name
-  environment        = var.environment
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-  alb_subnet_ids     = module.network.public_subnet_ids
+  project_name           = var.project_name
+  environment            = var.environment
+  private_subnet_ids     = module.network.private_subnet_ids
+  alb_subnet_ids         = module.network.public_subnet_ids
+  alb_security_group_id  = module.network.alb_security_group_id
+}
 
-  # Will be populated during Phase 3
-  enable_ecs_service = false
+module "ecs" {
+  count  = var.environment == "prod" ? 1 : 0
+  source = "./modules/ecs"
+
+  project_name                = var.project_name
+  environment                 = var.environment
+  aws_region                  = var.aws_region
+  api_domain                  = var.api_domain
+  route53_zone_id             = var.route53_zone_id
+  api_container_port          = var.api_container_port
+  ecs_task_cpu                = var.ecs_task_cpu
+  ecs_task_memory             = var.ecs_task_memory
+  ecs_desired_count           = var.ecs_desired_count
+  api_image_tag               = var.api_image_tag
+  runtime_secrets_arn         = var.runtime_secrets_arn
+  runtime_secrets_kms_key_arn = var.runtime_secrets_kms_key_arn
+  cors_origin                 = var.cors_origin
+  s3_bucket_name              = module.storage.bucket_name
+  s3_bucket_arn               = module.storage.bucket_arn
+  kms_key_arn                 = module.storage.kms_key_arn
+  vpc_id                      = module.network.vpc_id
+  private_subnet_ids          = module.network.private_subnet_ids
+  ecs_security_group_id       = module.network.ecs_security_group_id
+  ecs_cluster_id              = module.compute.cluster_id
+  alb_arn                     = module.compute.alb_arn
+  alb_dns_name                = module.compute.alb_dns
+  alb_zone_id                 = module.compute.alb_zone_id
 }
 
 # ============ EDGE (CloudFront + WAF) ============
-# Scaffolded; enabled during Phase 3
+# Optional edge distribution remains disabled until its DNS and certificate setup is complete.
 module "edge" {
   source = "./modules/edge"
 
-  project_name   = var.project_name
-  environment    = var.environment
-  api_domain     = var.api_domain
-  enable_cloudfront = false  # Enabled in prod during Phase 3
+  project_name      = var.project_name
+  environment       = var.environment
+  api_domain        = var.api_domain
+  enable_cloudfront = false
 }
 
 # ============ SECRETS MANAGER ============

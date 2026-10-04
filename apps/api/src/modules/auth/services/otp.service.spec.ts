@@ -5,6 +5,7 @@ import { AppException } from '@/common/exceptions/app.exception';
 import { RedisService } from '@/common/services/redis.service';
 import { OtpDelivery } from './otp-delivery';
 import { ConfigService } from '@nestjs/config';
+import nodemailer from 'nodemailer';
 
 describe('OtpService', () => {
   let service: OtpService;
@@ -236,6 +237,52 @@ describe('OtpDelivery', () => {
     const delivery = new OtpDelivery(configService);
 
     await expect(delivery.deliver('test@example.com', 'EMAIL', '123456')).resolves.toBeUndefined();
+  });
+
+  it('sends email OTPs through configured SMTP', async () => {
+    const sendMail = jest.fn().mockResolvedValue({ messageId: 'smtp-message' });
+    const createTransport = jest
+      .spyOn(nodemailer, 'createTransport')
+      .mockReturnValue({ sendMail } as unknown as ReturnType<typeof nodemailer.createTransport>);
+    const configValues: Record<string, string | number | boolean> = {
+      otp_transport: 'smtp',
+      sms_otp_transport: 'disabled',
+      node_env: 'development',
+      smtp_host: 'smtp.gmail.com',
+      smtp_port: 465,
+      smtp_secure: true,
+      smtp_user: 'sender@example.com',
+      smtp_password: 'app-password',
+      otp_sender_email: 'sender@example.com',
+    };
+    const configService = {
+      get: jest.fn((key: string) => configValues[key]),
+      getOrThrow: jest.fn((key: string) => {
+        const value = configValues[key];
+        if (value === undefined) throw new Error(`Missing ${key}`);
+        return value;
+      }),
+    } as unknown as ConfigService;
+
+    try {
+      const delivery = new OtpDelivery(configService);
+      await delivery.deliver('recipient@example.com', 'EMAIL', '123456');
+
+      expect(createTransport).toHaveBeenCalledWith({
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
+        auth: { user: 'sender@example.com', pass: 'app-password' },
+      });
+      expect(sendMail).toHaveBeenCalledWith({
+        from: 'sender@example.com',
+        to: 'recipient@example.com',
+        subject: 'Your AutoApply verification code',
+        text: 'Your verification code is 123456. It expires in 5 minutes.',
+      });
+    } finally {
+      createTransport.mockRestore();
+    }
   });
 
   it('rejects the console transport in production', () => {

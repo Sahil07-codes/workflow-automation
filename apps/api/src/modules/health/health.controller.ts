@@ -1,9 +1,23 @@
 import { Controller, Get, HttpCode, HttpStatus } from '@nestjs/common';
 import { Public } from '@/common/decorators/public.decorator';
 
-@Controller('health')
+@Controller()
 export class HealthController {
   @Get()
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  apiInfo() {
+    return {
+      name: 'AutoApply API',
+      status: 'ok',
+      version: '0.1.0',
+      health: '/v1/health',
+      readiness: '/v1/health/ready',
+      liveness: '/v1/health/live',
+    };
+  }
+
+  @Get('health')
   @Public()
   @HttpCode(HttpStatus.OK)
   health() {
@@ -14,7 +28,7 @@ export class HealthController {
     };
   }
 
-  @Get('ready')
+  @Get('health/ready')
   @Public()
   @HttpCode(HttpStatus.OK)
   readiness() {
@@ -24,7 +38,7 @@ export class HealthController {
     };
   }
 
-  @Get('live')
+  @Get('health/live')
   @Public()
   @HttpCode(HttpStatus.OK)
   liveness() {

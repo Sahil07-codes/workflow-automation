@@ -71,7 +71,13 @@ async function bootstrap() {
   const allowedOrigins = configuredOrigins.includes('*')
     ? configService.get<string>('node_env') === 'production'
       ? []
-      : ['http://localhost:3000', 'http://localhost:5173']
+      : [
+          'http://localhost:3000',
+          'http://localhost:5173',
+          'http://localhost:5180',
+          'http://127.0.0.1:5173',
+          'http://127.0.0.1:5180',
+        ]
     : configuredOrigins;
   if (allowedOrigins.length === 0) {
     throw new Error('CORS_ORIGIN must list allowed origins in production.');

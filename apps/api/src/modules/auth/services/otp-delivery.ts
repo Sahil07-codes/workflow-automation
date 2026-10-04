@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SendEmailCommand, SESClient } from '@aws-sdk/client-ses';
+import nodemailer, { Transporter } from 'nodemailer';
 import { AppException } from '@/common/exceptions/app.exception';
 
 type OtpChannel = 'EMAIL' | 'SMS';
@@ -11,6 +12,7 @@ export class OtpDelivery {
   private readonly emailTransport: string;
   private readonly smsTransport: string;
   private sesClient?: SESClient;
+  private smtpTransporter?: Transporter;
 
   constructor(private readonly configService: ConfigService) {
     this.emailTransport = (configService.get<string>('otp_transport') ?? 'ses').toLowerCase();
@@ -20,8 +22,10 @@ export class OtpDelivery {
     if (this.emailTransport === 'console' && configService.get<string>('node_env') === 'production') {
       throw new Error('OTP_TRANSPORT=console is not allowed in production');
     }
-    if (this.emailTransport !== 'console' && this.emailTransport !== 'ses') {
-      throw new Error(`Unknown OTP_TRANSPORT "${this.emailTransport}" (expected "console" or "ses")`);
+    if (!['console', 'ses', 'smtp'].includes(this.emailTransport)) {
+      throw new Error(
+        `Unknown OTP_TRANSPORT "${this.emailTransport}" (expected "console", "ses", or "smtp")`,
+      );
     }
     if (this.smsTransport !== 'disabled' && this.smsTransport !== 'twilio') {
       throw new Error(`Unknown SMS_OTP_TRANSPORT "${this.smsTransport}" (expected "disabled" or "twilio")`);
@@ -32,13 +36,13 @@ export class OtpDelivery {
   }
 
   async deliver(target: string, channel: OtpChannel, code: string): Promise<void> {
-    if (this.emailTransport === 'console') {
-      this.logger.warn(`[DEV ONLY] ${channel} OTP for ${target}: ${code}`);
+    if (channel === 'SMS') {
+      await this.deliverSms(target, code);
       return;
     }
 
-    if (channel === 'SMS') {
-      await this.deliverSms(target, code);
+    if (this.emailTransport === 'console') {
+      this.logger.warn(`[DEV ONLY] EMAIL OTP for ${target}: ${code}`);
       return;
     }
 
@@ -57,6 +61,11 @@ export class OtpDelivery {
         'Email OTP delivery is not configured.',
         503,
       );
+    }
+
+    if (this.emailTransport === 'smtp') {
+      await this.deliverSmtp(target, code, source);
+      return;
     }
 
     this.sesClient ??= new SESClient({
@@ -79,8 +88,43 @@ export class OtpDelivery {
     );
   }
 
+  private async deliverSmtp(target: string, code: string, source: string): Promise<void> {
+    const host = this.configService.getOrThrow<string>('smtp_host');
+    const port = this.configService.get<number>('smtp_port', 465);
+    const secure = this.configService.get<boolean>('smtp_secure', true);
+    const user = this.configService.getOrThrow<string>('smtp_user');
+    const password = this.configService.getOrThrow<string>('smtp_password');
+
+    this.smtpTransporter ??= nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass: password },
+    });
+
+    try {
+      await this.smtpTransporter.sendMail({
+        from: source,
+        to: target,
+        subject: 'Your AutoApply verification code',
+        text: `Your verification code is ${code}. It expires in 5 minutes.`,
+      });
+    } catch {
+      this.logger.error('SMTP email OTP delivery failed.');
+      throw new AppException(
+        'OTP_DELIVERY_FAILED',
+        'Email verification could not be sent. Please check the local SMTP configuration.',
+        503,
+      );
+    }
+  }
+
   private async deliverSms(target: string, code: string): Promise<void> {
     if (this.smsTransport !== 'twilio') {
+      if (this.configService.get<string>('node_env') !== 'production') {
+        this.logger.warn(`[DEV ONLY] SMS OTP for ${target}: ${code}`);
+        return;
+      }
       throw new AppException(
         'OTP_DELIVERY_UNAVAILABLE',
         'SMS OTP delivery is not configured.',

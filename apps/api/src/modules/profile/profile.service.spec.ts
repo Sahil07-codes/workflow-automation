@@ -16,6 +16,9 @@ describe('ProfileService', () => {
       create: jest.Mock;
       findMany: jest.Mock;
     };
+    jobPreferences: {
+      findUnique: jest.Mock;
+    };
   };
   let mockEncryption: jest.Mocked<ProfileEncryptionService>;
 
@@ -29,6 +32,9 @@ describe('ProfileService', () => {
       profileVersion: {
         create: jest.fn(),
         findMany: jest.fn(),
+      },
+      jobPreferences: {
+        findUnique: jest.fn(),
       },
     } as any;
 
@@ -163,7 +169,27 @@ describe('ProfileService', () => {
   });
 
   describe('confirmProfile', () => {
-    it('should set confirmed_at timestamp', async () => {
+    it('should confirm onboarding after all required details are present', async () => {
+      mockPrisma.profile.findUnique.mockResolvedValueOnce({
+        user_id: 'user-123',
+        data_enc: Buffer.from('encrypted'),
+      } as any);
+      mockEncryption.decryptProfileData.mockResolvedValueOnce({
+        full_name: 'Test User',
+        location: 'New Delhi',
+        linkedin_url: 'https://www.linkedin.com/in/test-user',
+        professional_status: 'experienced_professional',
+        current_title: 'Engineer',
+        years_experience: '3–5 years',
+        current_company: 'Example Co',
+        profile_visibility: 'private',
+      });
+      mockPrisma.jobPreferences.findUnique.mockResolvedValueOnce({
+        roles: ['Engineer'],
+        locations: ['New Delhi'],
+        skills: ['TypeScript'],
+        remote_preference: 'HYBRID',
+      });
       mockPrisma.profile.update.mockResolvedValueOnce({
         user_id: 'user-123',
         confirmed_at: new Date(),
@@ -180,6 +206,22 @@ describe('ProfileService', () => {
           }),
         }),
       );
+    });
+
+    it('should not confirm onboarding when required details are missing', async () => {
+      mockPrisma.profile.findUnique.mockResolvedValueOnce({
+        user_id: 'user-123',
+        data_enc: Buffer.from('encrypted'),
+      } as any);
+      mockEncryption.decryptProfileData.mockResolvedValueOnce({
+        full_name: 'Test User',
+      });
+      mockPrisma.jobPreferences.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.confirmProfile('user-123')).rejects.toThrow(
+        'Complete all required profile, preference, and privacy details before confirming your profile.',
+      );
+      expect(mockPrisma.profile.update).not.toHaveBeenCalled();
     });
   });
 

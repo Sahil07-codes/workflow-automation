@@ -100,7 +100,9 @@ jobs:
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
             -t "autoapply-api:${RELEASE_VERSION}" \
+            -t "autoapply-api:latest" \
             -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}" \
+            -t "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest" \
             -f apps/api/Dockerfile .
 
       - name: Scan production image
@@ -114,7 +116,9 @@ jobs:
       - name: Push production image
         env:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
-        run: docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}"
+        run: |
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:${RELEASE_VERSION}"
+          docker push "${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
 
       - name: Deploy image to ECS
         env:

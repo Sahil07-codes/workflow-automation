@@ -25,6 +25,7 @@
     "bullmq": "^5.0.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.9.0",
+    "pdfjs-dist": "^4.10.38",
     "playwright": "^1.49.1",
     "redis": "^4.6.10",
     "reflect-metadata": "^0.2.2",

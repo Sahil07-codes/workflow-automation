@@ -121,6 +121,32 @@ export class ProfileService {
   }
 
   async confirmProfile(userId: string) {
+    const profile = await this.prisma.profile.findUnique({
+      where: { user_id: userId },
+    });
+    if (!profile) {
+      throw new AppException(
+        'PROFILE_NOT_FOUND',
+        'Complete your profile before confirming onboarding.',
+        404,
+      );
+    }
+
+    const profileData = await this.encryptionService.decryptProfileData(
+      userId,
+      profile.data_enc,
+    );
+    const preferences = await this.prisma.jobPreferences.findUnique({
+      where: { user_id: userId },
+    });
+    if (!this.hasCompletedOnboarding(profileData, preferences)) {
+      throw new AppException(
+        'ONBOARDING_INCOMPLETE',
+        'Complete all required profile, preference, and privacy details before confirming your profile.',
+        400,
+      );
+    }
+
     return this.prisma.profile.update({
       where: { user_id: userId },
       data: { confirmed_at: new Date() },
@@ -130,6 +156,50 @@ export class ProfileService {
         confirmed_at: true,
       },
     });
+  }
+
+  private hasCompletedOnboarding(
+    profileData: Record<string, unknown>,
+    preferences: {
+      roles: string[];
+      locations: string[];
+      skills: string[];
+      remote_preference: string | null;
+    } | null,
+  ): boolean {
+    const hasProfileValue = (key: string) => {
+      const value = profileData[key];
+      return typeof value === 'string' ? value.trim().length > 0 : typeof value === 'number';
+    };
+    const professionalStatus = profileData.professional_status;
+    const professionalComplete =
+      professionalStatus === 'student_recent_graduate'
+        ? ['education_level', 'institution', 'field_of_study'].every(
+            hasProfileValue,
+          ) &&
+          hasProfileValue('graduation_year') &&
+          Number.isFinite(Number(profileData.graduation_year))
+        : professionalStatus === 'experienced_professional'
+          ? ['current_title', 'years_experience', 'current_company'].every(
+              hasProfileValue,
+            )
+          : false;
+    const hasEntries = (values: string[] | undefined) =>
+      Array.isArray(values) &&
+      values.some((value) => typeof value === 'string' && value.trim().length > 0);
+
+    return (
+      ['full_name', 'location', 'linkedin_url'].every(hasProfileValue) &&
+      professionalComplete &&
+      hasProfileValue('profile_visibility') &&
+      Boolean(preferences) &&
+      hasEntries(preferences?.roles) &&
+      hasEntries(preferences?.locations) &&
+      hasEntries(preferences?.skills) &&
+      ['ONSITE', 'HYBRID', 'REMOTE'].includes(
+        preferences?.remote_preference ?? '',
+      )
+    );
   }
 
   async getProfileVersions(userId: string) {

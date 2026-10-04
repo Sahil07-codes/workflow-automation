@@ -150,6 +150,31 @@ describe('Profile E2E', () => {
 
     it('should confirm profile', async () => {
       await createInitialProfile();
+      await request(app.getHttpServer())
+        .put('/v1/profile')
+        .set('Authorization', ['Bearer', accessToken].join(' '))
+        .send({
+          full_name: 'Profile Test',
+          location: 'New Delhi',
+          linkedin_url: 'https://www.linkedin.com/in/profile-test',
+          professional_status: 'experienced_professional',
+          current_title: 'Software Engineer',
+          years_experience: '3–5 years',
+          current_company: 'Example Company',
+          profile_visibility: 'private',
+        })
+        .expect(200);
+      await request(app.getHttpServer())
+        .put('/v1/preferences')
+        .set('Authorization', ['Bearer', accessToken].join(' '))
+        .send({
+          roles: ['Software Engineer'],
+          locations: ['New Delhi'],
+          skills: ['TypeScript'],
+          remote_preference: 'HYBRID',
+        })
+        .expect(200);
+
       const response = await request(app.getHttpServer())
         .post('/v1/profile/confirm')
         .set('Authorization', `Bearer ${accessToken}`)

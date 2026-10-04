@@ -17,9 +17,14 @@ export interface AppConfig {
   otp_ttl: number;
   otp_max_attempts: number;
   otp_pepper: string;
-  otp_transport: 'console' | 'ses';
+  otp_transport: 'console' | 'ses' | 'smtp';
   sms_otp_transport: 'disabled' | 'twilio';
   otp_sender_email?: string;
+  smtp_host?: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  smtp_user?: string;
+  smtp_password?: string;
   twilio_account_sid?: string;
   twilio_auth_token?: string;
   twilio_from_number?: string;
@@ -72,6 +77,11 @@ const ENV_KEY_MAP: Record<keyof AppConfig, string> = {
   otp_transport: 'OTP_TRANSPORT',
   sms_otp_transport: 'SMS_OTP_TRANSPORT',
   otp_sender_email: 'OTP_SENDER_EMAIL',
+  smtp_host: 'SMTP_HOST',
+  smtp_port: 'SMTP_PORT',
+  smtp_secure: 'SMTP_SECURE',
+  smtp_user: 'SMTP_USER',
+  smtp_password: 'SMTP_PASSWORD',
   twilio_account_sid: 'TWILIO_ACCOUNT_SID',
   twilio_auth_token: 'TWILIO_AUTH_TOKEN',
   twilio_from_number: 'TWILIO_FROM_NUMBER',
@@ -117,7 +127,7 @@ const validationSchema = Joi.object<AppConfig>({
   otp_max_attempts: Joi.number().min(1).max(10).default(5),
   otp_pepper: Joi.string().required(),
   otp_transport: Joi.string()
-    .valid('console', 'ses')
+    .valid('console', 'ses', 'smtp')
     .when('node_env', {
       is: 'production',
       then: Joi.valid('ses'),
@@ -133,10 +143,27 @@ const validationSchema = Joi.object<AppConfig>({
   otp_sender_email: Joi.string()
     .email()
     .when('otp_transport', {
-      is: 'ses',
+      is: Joi.valid('ses', 'smtp'),
       then: Joi.required(),
       otherwise: Joi.optional().allow(''),
     }),
+  smtp_host: Joi.string().when('otp_transport', {
+    is: 'smtp',
+    then: Joi.required(),
+    otherwise: Joi.optional().allow(''),
+  }),
+  smtp_port: Joi.number().port().default(465),
+  smtp_secure: Joi.boolean().default(true),
+  smtp_user: Joi.string().when('otp_transport', {
+    is: 'smtp',
+    then: Joi.required(),
+    otherwise: Joi.optional().allow(''),
+  }),
+  smtp_password: Joi.string().when('otp_transport', {
+    is: 'smtp',
+    then: Joi.required(),
+    otherwise: Joi.optional().allow(''),
+  }),
   twilio_account_sid: Joi.string()
     .pattern(/^AC[0-9a-fA-F]{32}$/)
     .when('sms_otp_transport', {
@@ -194,8 +221,11 @@ const validationSchema = Joi.object<AppConfig>({
 export function validate(rawEnv: Record<string, any>): AppConfig {
   const remapped: Record<string, any> = {};
   for (const [configKey, envKey] of Object.entries(ENV_KEY_MAP)) {
-    if (rawEnv[envKey] !== undefined) {
-      remapped[configKey] = rawEnv[envKey];
+    const configuredValue =
+      rawEnv[envKey] ??
+      (configKey === 'cors_origin' ? rawEnv.CORS_ORIGINS : undefined);
+    if (configuredValue !== undefined) {
+      remapped[configKey] = configuredValue;
     }
   }
 

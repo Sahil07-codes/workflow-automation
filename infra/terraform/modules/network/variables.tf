@@ -29,3 +29,8 @@ variable "data_subnet_cidrs" {
 variable "restricted_subnet_cidr" {
   type = string
 }
+
+variable "api_container_port" {
+  type    = number
+  default = 3000
+}

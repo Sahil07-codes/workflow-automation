@@ -28,7 +28,7 @@ export const pages: PageDefinition[] = [
   { path: "/onboarding/review", title: "Review your profile", description: "Check your details and visibility choice before confirming your profile.", group: "onboarding", resource: "/profile" },
   { path: "/app/dashboard", title: "Dashboard", description: "A clear view of what needs your attention and what happens next.", group: "app", resource: "/dashboard" },
   { path: "/app/jobs", title: "Discover jobs", description: "Explore opportunities using the job data available to your account.", group: "app", resource: "/jobs" },
-  { path: "/app/jobs/submit", title: "Submit job links", description: "This capability is not available in the current backend.", group: "app", resource: "/jobs/links" },
+  { path: "/app/jobs/submit", title: "Submit job links", description: "Send public job postings for processing and review their status.", group: "app", resource: "/jobs/links" },
   { path: "/app/jobs/:id", title: "Job details", description: "Review the role and its match details.", group: "app", resource: "/jobs/:id" },
   { path: "/app/applications", title: "Applications", description: "Track every application through its current state.", group: "app", resource: "/applications" },
   { path: "/app/applications/approval", title: "Review applications", description: "Review eligible applications before approving any action.", group: "app", resource: "/applications" },
@@ -65,6 +65,7 @@ export const navigation = [
     links: [
       { label: "Dashboard", to: "/app/dashboard", icon: "dashboard" },
       { label: "Discover jobs", to: "/app/jobs", icon: "search" },
+      { label: "Add job links", to: "/app/jobs/submit", icon: "link" },
       { label: "Applications", to: "/app/applications", icon: "briefcase" },
       { label: "Profile", to: "/app/profile", icon: "user" },
     ],
@@ -74,6 +75,8 @@ export const navigation = [
     links: [
       { label: "Preferences", to: "/app/preferences", icon: "sliders" },
       { label: "Answer bank", to: "/app/answer-bank", icon: "message" },
+      { label: "Resume", to: "/app/resume", icon: "file" },
+      { label: "Notifications", to: "/app/notifications", icon: "message" },
     ],
   },
   {
