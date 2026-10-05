@@ -9,7 +9,8 @@ import { v4 as uuid } from 'uuid';
 @Injectable()
 export class TokenService {
   private readonly ACCESS_TOKEN_EXPIRY = 900; // 15 minutes in seconds
-  private readonly REFRESH_TOKEN_EXPIRY = 30 * 24 * 60 * 60; // 30 days in seconds
+  static readonly SESSION_IDLE_TIMEOUT_SECONDS = 60 * 60;
+  private readonly REFRESH_TOKEN_EXPIRY = TokenService.SESSION_IDLE_TIMEOUT_SECONDS;
 
   constructor(
     private jwtService: JwtService,
@@ -74,7 +75,12 @@ export class TokenService {
     }
 
     // Check expiry
-    if (tokenRecord.expires_at < new Date()) {
+    const now = new Date();
+    const lastActivity = tokenRecord.last_activity_at ?? tokenRecord.created_at;
+    if (
+      tokenRecord.expires_at < now ||
+      lastActivity.getTime() <= now.getTime() - this.REFRESH_TOKEN_EXPIRY * 1000
+    ) {
       throw new AppException('SESSION_EXPIRED', 'Refresh token expired.', 401);
     }
 
@@ -110,6 +116,22 @@ export class TokenService {
       expires_in: this.ACCESS_TOKEN_EXPIRY,
       token_type: 'Bearer',
     };
+  }
+
+  async touchSession(familyId: string): Promise<void> {
+    const now = new Date();
+    const idleCutoff = new Date(
+      now.getTime() - this.REFRESH_TOKEN_EXPIRY * 1000,
+    );
+    const active = await this.refreshTokenRepo.touchActiveSession(
+      familyId,
+      now,
+      idleCutoff,
+      new Date(now.getTime() + this.REFRESH_TOKEN_EXPIRY * 1000),
+    );
+    if (!active) {
+      throw new AppException('SESSION_EXPIRED', 'Your session expired due to inactivity.', 401);
+    }
   }
 
   async revokeAllTokens(userId: string): Promise<void> {

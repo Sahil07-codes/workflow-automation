@@ -23,6 +23,17 @@ const iconByName = {
   message: MessageSquareText,
 };
 
+const SESSION_LAST_ACTIVITY_KEY = "autoapply.session.lastActivityAt";
+const SESSION_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+
+function saveSessionActivity(timestamp = Date.now()) {
+  try {
+    localStorage.setItem(SESSION_LAST_ACTIVITY_KEY, String(timestamp));
+  } catch {
+    // The server-enforced idle timeout remains active when browser storage is unavailable.
+  }
+}
+
 export default function App() {
   return (
     <Routes>
@@ -52,6 +63,9 @@ function PageRoute({ page }: { page: PageDefinition }) {
   if (["/signup", "/signup/verify-email", "/signup/mobile", "/signup/verify-mobile", "/signup/credentials"].includes(page.path)) {
     return <AuthOverlay page={page}><SignupFlowPage page={page} /></AuthOverlay>;
   }
+  if (page.path === "/forgot-password") {
+    return <AuthOverlay page={page}><PasswordRecoveryPage /></AuthOverlay>;
+  }
   if (page.group === "auth") return <AuthOverlay page={page}><AuthPage page={page} /></AuthOverlay>;
   if (page.legal) return <LegalPage page={page} />;
   if (page.group === "public") return <PublicEntryPage page={page} />;
@@ -60,6 +74,12 @@ function PageRoute({ page }: { page: PageDefinition }) {
   }
   if (page.path === "/app/resume") {
     return <ProductLayout page={page}><ResumePage /></ProductLayout>;
+  }
+  if (page.path === "/app/profile") {
+    return <ProductLayout page={page}><ProfilePage /></ProductLayout>;
+  }
+  if (page.path === "/app/preferences") {
+    return <ProductLayout page={page}><PreferencesPage /></ProductLayout>;
   }
   if (page.path === "/app/notifications") {
     return <ProductLayout page={page}><NotificationsPage /></ProductLayout>;
@@ -280,6 +300,7 @@ function SignupFlowPage({ page }: { page: PageDefinition }) {
 
 function ProductLayout({ page, children }: { page: PageDefinition; children: React.ReactNode }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -310,6 +331,79 @@ function ProductLayout({ page, children }: { page: PageDefinition; children: Rea
   }, [accessScope]);
 
   useEffect(() => {
+    if (!["ready", "onboarding-required"].includes(checkedSessionState)) return;
+
+    let lastActivity = Date.now();
+    try {
+      const storedActivity = Number(localStorage.getItem(SESSION_LAST_ACTIVITY_KEY));
+      if (Number.isFinite(storedActivity) && storedActivity > 0) lastActivity = storedActivity;
+      else saveSessionActivity(lastActivity);
+    } catch {
+      saveSessionActivity(lastActivity);
+    }
+
+    let timer = 0;
+    let expired = false;
+    const scheduleLogout = () => {
+      window.clearTimeout(timer);
+      const remaining = SESSION_IDLE_TIMEOUT_MS - (Date.now() - lastActivity);
+      if (remaining > 0) {
+        timer = window.setTimeout(scheduleLogout, remaining);
+        return;
+      }
+      if (expired) return;
+      expired = true;
+      try {
+        localStorage.removeItem(SESSION_LAST_ACTIVITY_KEY);
+      } catch {
+        // Continue to clear the server session and navigate even if storage is unavailable.
+      }
+      void apiRequest<unknown>("/auth/logout", { method: "POST" }).catch(() => undefined);
+      navigate("/login", {
+        replace: true,
+        state: {
+          returnTo: `${location.pathname}${location.search}`,
+          sessionExpired: true,
+        },
+      });
+    };
+    const recordActivity = () => {
+      if (expired) return;
+      lastActivity = Date.now();
+      saveSessionActivity(lastActivity);
+      scheduleLogout();
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_LAST_ACTIVITY_KEY) return;
+      if (event.newValue === null) {
+        lastActivity = Date.now() - SESSION_IDLE_TIMEOUT_MS;
+        scheduleLogout();
+        return;
+      }
+      const storedActivity = Number(event.newValue);
+      if (Number.isFinite(storedActivity) && storedActivity > lastActivity) {
+        lastActivity = storedActivity;
+        scheduleLogout();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") scheduleLogout();
+    };
+    const activityEvents: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "mousemove"];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }));
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibility);
+    scheduleLogout();
+
+    return () => {
+      window.clearTimeout(timer);
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, recordActivity));
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [checkedSessionState, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
     setMobileNavOpen(false);
     setSearchOpen(false);
   }, [location.pathname]);
@@ -337,11 +431,6 @@ function ProductLayout({ page, children }: { page: PageDefinition; children: Rea
             <span className="brand-symbol"><Sparkles size={17} strokeWidth={2.2} /></span>
             <span>autoapply</span>
           </Link>
-          <div className="workspace-picker">
-            <span className="workspace-mark">A</span>
-            <span className="workspace-copy"><strong>My workspace</strong><small>Personal account</small></span>
-            <ChevronDown size={15} />
-          </div>
           {navigation.map((group) => (
             <nav className="nav-group" key={group.label} aria-label={group.label}>
               <p className="nav-heading">{group.label}</p>
@@ -450,7 +539,7 @@ function LandingPage() {
                 <div className="preview-approval"><span><ShieldCheck size={17} /> You decide before it’s sent</span><span className="approval-button">Review application</span></div>
               </div>
             </div>
-            <p className="hero-preview-caption">Illustrative preview · details depend on connected service data.</p>
+            <p className="hero-preview-caption">Illustrative preview · your opportunities update as your search progresses.</p>
             <div className="floating-note note-top"><span className="note-icon"><Check size={15} /></span><span><strong>Thoughtful by design</strong><small>Every detail is reviewable</small></span></div>
             <div className="floating-note note-bottom"><span className="note-icon note-amber"><Clock3 size={15} /></span><span><strong>Waiting for you</strong><small>Nothing moves without approval</small></span></div>
           </div>
@@ -502,6 +591,12 @@ function AuthPage({ page }: { page: PageDefinition }) {
   const verificationState = isRecord(serverData) ? String(serverData.status ?? "").toUpperCase() : "";
   const verificationBlocked = ["LOCKED", "RATE_LIMITED", "ATTEMPTS_EXCEEDED"].includes(verificationState);
   const verificationExpired = verificationState === "EXPIRED";
+  useEffect(() => {
+    if (isRecord(location.state) && location.state.sessionExpired === true) {
+      setNotice("You were signed out after one hour of inactivity. Please sign in again.");
+    }
+  }, [location.state]);
+
   useEffect(() => {
     if (isVerification && isApiConfigured) {
       apiRequest<unknown>("/auth/verification-status").then(({ data }) => setServerData(data)).catch((reason: unknown) => setError(errorMessage(reason)));
@@ -588,6 +683,7 @@ function AuthPage({ page }: { page: PageDefinition }) {
       const { data } = await apiRequest<unknown>(endpoint, { method: "POST", body: JSON.stringify(body) });
       setServerData(data);
       if (!isSignup && !isVerification && !isGoogle && !isComplete) {
+        saveSessionActivity();
         const routeState = isRecord(location.state) ? location.state : null;
         const intendedPath = routeState && typeof routeState.returnTo === "string"
           ? safeNextPath(routeState.returnTo)
@@ -658,12 +754,120 @@ function AuthPage({ page }: { page: PageDefinition }) {
                 <button className="button button-primary full-width" type="submit" disabled={busy || !isApiConfigured || verificationBlocked || verificationExpired}>{busy ? <><span className="spinner" /> Working…</> : <>{isVerification ? "Verify code" : isSignup ? "Create account" : "Sign in"} <ArrowRight size={16} /></>}</button>
                 {!isApiConfigured && <p className="form-contract-note">Connect the authentication service to enable account actions.</p>}
               </form>
+              {page.path === "/login" && <Link className="forgot-password-link" to="/forgot-password">Forgot your password?</Link>}
               {isVerification && <div className="auth-recovery"><button type="button" onClick={() => void resendCode()} disabled={!isApiConfigured || resendBusy || resendCooldown > 0 || verificationBlocked}>{resendBusy ? "Sending…" : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend code"}</button><span>·</span><Link to="/signup">{isEmailOtp ? "Change email" : "Change number"}</Link></div>}
               <div className="auth-switch">{isSignup ? <>Already have an account? <Link to="/login">Sign in</Link></> : <>New to AutoApply? <Link to="/signup">Create an account</Link></>}</div>
             </>
           )}
         </div>
         <p className="auth-privacy"><LockKeyhole size={13} /> Your account information is handled by the connected authentication service.</p>
+      </main>
+      <footer className="auth-footer"><span>© AutoApply</span><div><Link to="/privacy">Privacy</Link><Link to="/terms">Terms</Link><Link to="/refunds">Refunds</Link></div></footer>
+    </div>
+  );
+}
+
+function PasswordRecoveryPage() {
+  const [stage, setStage] = useState<"request" | "confirm" | "complete">("request");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function sendCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await apiRequest<unknown>("/auth/password-reset/request", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setStage("confirm");
+      setNotice("If this email is associated with an account, a reset code has been sent.");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendCode() {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await apiRequest<unknown>("/auth/password-reset/request", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setNotice("A new reset code was requested. Use the most recent code.");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if (password !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiRequest<unknown>("/auth/password-reset/confirm", {
+        method: "POST",
+        body: JSON.stringify({ email, code, new_password: password }),
+      });
+      setPassword("");
+      setConfirmPassword("");
+      setStage("complete");
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="auth-page">
+      <div className="auth-top"><Link className="brand" to="/"><span className="brand-symbol"><Sparkles size={17} /></span><span>autoapply</span></Link><Link to="/login" className="back-home"><ArrowLeft size={15} /> Back to sign in</Link></div>
+      <main id="main-content" className="auth-main">
+        <section className="auth-card">
+          <div className="auth-brand-mark"><span>{stage === "complete" ? <Check size={21} /> : <LockKeyhole size={20} />}</span></div>
+          <span className="eyebrow">Secure account recovery</span>
+          <h1>{stage === "complete" ? "Password updated" : "Reset your password"}</h1>
+          {stage === "request" && <>
+            <p className="auth-description">Enter your account email. We’ll send a one-time code if it’s associated with an account.</p>
+            <form className="auth-form" onSubmit={(event) => void sendCode(event)}>
+              <div className="field-row"><label htmlFor="recovery-email">Email address</label><input id="recovery-email" name="email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></div>
+              {error && <ErrorBanner message={error} />}
+              <button className="button button-primary full-width" type="submit" disabled={!isApiConfigured || busy}>{busy ? <><span className="spinner" /> Sending code…</> : <>Send reset code <ArrowRight size={16} /></>}</button>
+            </form>
+          </>}
+          {stage === "confirm" && <>
+            <p className="auth-description">Enter the latest six-digit code sent to <strong>{email}</strong>, then choose a new password.</p>
+            <form className="auth-form" onSubmit={(event) => void confirmReset(event)}>
+              <div className="field-row"><label htmlFor="recovery-code">Email verification code</label><input id="recovery-code" name="code" className="otp-input" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={(event) => setCode(event.target.value)} /></div>
+              <div className="field-row"><label htmlFor="recovery-password">New password</label><input id="recovery-password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /></div>
+              <div className="field-row"><label htmlFor="recovery-confirm-password">Confirm new password</label><input id="recovery-confirm-password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></div>
+              {error && <ErrorBanner message={error} />}
+              {notice && <div className="inline-notice" role="status"><Check size={16} />{notice}</div>}
+              <button className="button button-primary full-width" type="submit" disabled={!isApiConfigured || busy}>{busy ? <><span className="spinner" /> Updating password…</> : <>Update password <ArrowRight size={16} /></>}</button>
+            </form>
+            <div className="auth-recovery"><button type="button" onClick={() => void resendCode()} disabled={busy}>Resend code</button><span>·</span><button type="button" onClick={() => { setError(""); setNotice(""); setStage("request"); }}>Change email</button></div>
+          </>}
+          {stage === "complete" && <div className="auth-success"><span className="success-mark"><Check size={20} /></span><strong>Your password has been changed</strong><p>Sign in again with your new password. Existing sessions have been ended.</p><Link className="button button-primary full-width" to="/login" state={{ email }}>Return to sign in <ArrowRight size={16} /></Link></div>}
+        </section>
+        <p className="auth-privacy"><LockKeyhole size={13} /> Reset codes are sent through your configured email delivery service.</p>
       </main>
       <footer className="auth-footer"><span>© AutoApply</span><div><Link to="/privacy">Privacy</Link><Link to="/terms">Terms</Link><Link to="/refunds">Refunds</Link></div></footer>
     </div>
@@ -1007,6 +1211,7 @@ function getOnboardingFields(path: string, professionalStatus: string | string[]
     { key: "full_name", label: "Full name", type: "text", required: true, placeholder: "Your name" },
     { key: "location", label: "City or region", type: "text", required: true, placeholder: "City, region, or country", hint: "A general location is enough; avoid adding a street address." },
     { key: "linkedin_url", label: "LinkedIn profile", type: "url", required: true, placeholder: "https://www.linkedin.com/in/your-profile" },
+    { key: "github_url", label: "GitHub profile", type: "url", placeholder: "https://github.com/your-profile" },
   ];
   if (path === "/onboarding/professional") {
     if (professionalStatus === "student_recent_graduate") return [
@@ -1086,6 +1291,7 @@ function OnboardingReviewSummary({ values }: { values: OnboardingValues }) {
     full_name: "Full name",
     location: "City or region",
     linkedin_url: "LinkedIn profile",
+    github_url: "GitHub profile",
     professional_status: "Professional status",
     education_level: "Education level",
     institution: "School or institution",
@@ -1755,7 +1961,7 @@ function ProductPage({ page }: { page: PageDefinition }) {
       <RemoteState resource={resource} remote={remote} onRetry={() => setRefreshKey((key) => key + 1)} />
       {remote.status === "ready" && remote.data != null && isList && <ServiceRecords data={remote.data} page={page} />}
       {editableFields && <ServiceEditor resource={resource.split("?")[0]} fields={editableFields} enabled={isApiConfigured && remote.status === "ready"} onSaved={() => setRefreshKey((key) => key + 1)} />}
-      {remote.status === "ready" && remote.data != null && !isList && !editableFields && !isBatch && <DataSummary data={remote.data} />}
+      {remote.status === "ready" && remote.data != null && !isList && !editableFields && !isBatch && <DataSummary data={remote.data} title={summaryTitle(page)} />}
       {remote.status === "ready" && remote.data != null && <ServiceActions resource={resource.split("?")[0]} data={remote.data} enabled={page.group !== "phase2" || (phaseEnabled && (page.path !== "/app/settings/connected-accounts/dummy-mode" || (isRecord(remote.data) && remote.data.consent_recorded === true)))} onComplete={() => setRefreshKey((key) => key + 1)} />}
       {isList && pagination && remote.status === "ready" && <PaginationControls pagination={pagination} onPage={setCursor} />}
       {isPhase2 && remote.status === "ready" && remote.data != null && !phaseEnabled && <div className="content-required"><LockKeyhole size={20} /><div><strong>This capability is not enabled</strong><p>Phase 2 functionality is shown only when the service confirms it is available for your account.</p></div></div>}
@@ -1805,14 +2011,257 @@ function RemoteState({ resource, remote, onRetry, compact = true }: { resource: 
   return null;
 }
 
-function DataSummary({ data }: { data: unknown }) {
+function summaryTitle(page: PageDefinition): string {
+  const titles: Record<string, string> = {
+    "/app/dashboard": "Your activity",
+    "/app/jobs": "Available opportunities",
+    "/app/applications": "Your application activity",
+    "/app/answer-bank": "Saved answers",
+    "/app/billing": "Subscription details",
+    "/app/referrals": "Referral activity",
+    "/app/settings/security": "Security and session details",
+    "/app/settings/privacy": "Privacy and data controls",
+    "/app/notifications": "Recent account updates",
+  };
+  return titles[page.path] ?? `${page.title} details`;
+}
+
+function DataSummary({ data, title = "Account details" }: { data: unknown; title?: string }) {
   const entries = getDisplayableData(data);
   if (entries.length === 0) return null;
   return (
-    <section className="data-summary" aria-label="Information from your service">
-      <div className="data-summary-head"><span className="eyebrow">From your connected service</span><span className="live-indicator"><i /> Current response</span></div>
+    <section className="data-summary" aria-label={title}>
+      <div className="data-summary-head"><span className="eyebrow">{title}</span><span className="live-indicator"><i /> Updated from your account</span></div>
       <div className="data-grid">{entries.map((entry) => <div className="data-item" key={`${entry.label}-${entry.value}`}><span>{entry.label}</span><strong>{entry.value}</strong></div>)}</div>
     </section>
+  );
+}
+
+function ProfilePage() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [values, setValues] = useState<OnboardingValues>({});
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const profile = useRemoteData<unknown>("/profile", refreshKey);
+  const data = isRecord(profile.data) && isRecord(profile.data.data) ? profile.data.data : {};
+  useEffect(() => {
+    if (profile.status !== "ready") return;
+    const loaded = getOnboardingValues(profile.data);
+    for (const [key, value] of Object.entries(loaded)) {
+      if (key === "skills" && Array.isArray(value)) loaded[key] = value.join(", ");
+    }
+    setValues(loaded);
+  }, [profile.data, profile.status]);
+  const profileFields = [
+    ...getOnboardingFields("/onboarding/contact", values.professional_status).map((field) => ({ ...field, required: false })),
+    {
+      key: "professional_status",
+      label: "Career stage",
+      type: "radio" as const,
+      options: professionalStatusOptions,
+    },
+    ...getOnboardingFields("/onboarding/professional", values.professional_status).map((field) => ({ ...field, required: false })),
+    { key: "skills", label: "Skills", type: "textarea" as const, placeholder: "Add skills separated by commas." },
+    { key: "experience_summary", label: "Professional summary", type: "textarea" as const, placeholder: "A short summary of your experience." },
+    ...getOnboardingFields("/onboarding/privacy", values.professional_status).map((field) => ({ ...field, required: false })),
+  ];
+  const sections: Array<{ title: string; fields: Array<[string, string]> }> = [
+    {
+      title: "Basic details",
+      fields: [["full_name", "Full name"], ["location", "Location"], ["linkedin_url", "LinkedIn profile"], ["github_url", "GitHub profile"], ["email", "Email"]],
+    },
+    {
+      title: "Resume and professional details",
+      fields: [
+        ["professional_status", "Career stage"],
+        ["current_title", "Current or most recent role"],
+        ["current_company", "Current or most recent company"],
+        ["years_experience", "Years of experience"],
+        ["education_level", "Education level"],
+        ["institution", "School or institution"],
+        ["field_of_study", "Field of study"],
+        ["graduation_year", "Graduation year"],
+        ["skills", "Skills"],
+        ["experience_summary", "Professional summary"],
+      ],
+    },
+    {
+      title: "Privacy",
+      fields: [["profile_visibility", "Profile visibility"]],
+    },
+  ];
+  const labelValue = (key: string, raw: unknown): string => {
+    const value = Array.isArray(raw) ? raw.join(", ") : formatServiceValue(raw);
+    if (key === "professional_status") {
+      return value === "student recent graduate" ? "Student / recent graduate" :
+        value === "experienced professional" ? "Experienced professional" : value;
+    }
+    return value;
+  };
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const updated = { ...data, ...values };
+      if (typeof updated.skills === "string") {
+        updated.skills = updated.skills.split(",").map((skill) => skill.trim()).filter(Boolean);
+      }
+      await apiRequest<unknown>("/profile", {
+        method: "PUT",
+        body: JSON.stringify(updated),
+      });
+      setEditing(false);
+      setNotice("Your profile changes have been saved.");
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="account-feature-page">
+      <RemoteState resource="/profile" remote={profile} compact={false} onRetry={profile.retry} />
+      {profile.status === "ready" && profile.data != null && (
+        <>
+          <div className="data-summary-head">
+            <span className="eyebrow">Keep your application details up to date</span>
+            {!editing && <div className="button-row">
+              <button type="button" className="button button-secondary button-small" onClick={profile.retry}>Refresh details</button>
+              <button type="button" className="button button-secondary button-small" onClick={() => { setEditing(true); setError(""); setNotice(""); }}>Edit profile</button>
+            </div>}
+          </div>
+          {!editing && Object.keys(data).length > 0 && (
+            <p className="field-hint profile-source-note">
+              Resume-extracted details are saved here alongside the information you entered during onboarding. Review them before using them in an application.
+            </p>
+          )}
+          {notice && <div className="inline-notice" role="status"><Check size={16} />{notice}</div>}
+          {editing ? (
+            <form className="onboarding-profile-form" onSubmit={(event) => void saveProfile(event)}>
+              <div className="onboarding-form-grid">
+                {profileFields.map((field) => (
+                  <OnboardingFieldControl
+                    field={field}
+                    key={field.key}
+                    value={values[field.key] ?? ""}
+                    onChange={(value) => setValues((current) => ({ ...current, [field.key]: value }))}
+                  />
+                ))}
+              </div>
+              {error && <ErrorBanner message={error} />}
+              <div className="onboarding-nav">
+                <button type="button" className="button button-secondary" onClick={() => { setEditing(false); setError(""); }}>Cancel</button>
+                <span>Changes are encrypted and versioned</span>
+                <button type="submit" className="button button-primary" disabled={!isApiConfigured || busy}>{busy ? "Saving…" : "Save changes"} <ArrowRight size={15} /></button>
+              </div>
+            </form>
+          ) : <>
+          {sections.map((section) => {
+            const rows = section.fields
+              .filter(([key]) => data[key] !== undefined && data[key] !== null && data[key] !== "")
+              .map(([key, label]) => ({ key, label, value: labelValue(key, data[key]) }));
+            return rows.length > 0 ? (
+              <section className="profile-detail-section" key={section.title}>
+                <span className="eyebrow">{section.title}</span>
+                <dl>{rows.map((row) => (
+                  <div className="profile-detail-row" key={row.key}>
+                    <dt>{row.label}</dt>
+                    <dd className={row.key === "experience_summary" ? "profile-summary-value" : undefined}>
+                      {row.key === "skills" && Array.isArray(data.skills)
+                        ? <ul className="profile-skill-list">{data.skills.filter((skill): skill is string => typeof skill === "string" && skill.trim().length > 0).map((skill) => <li key={skill}>{skill}</li>)}</ul>
+                        : row.key === "linkedin_url" && /^https:\/\/(?:www\.)?linkedin\.com\//i.test(String(data[row.key])) ||
+                        row.key === "github_url" && /^https:\/\/(?:www\.)?github\.com\//i.test(String(data[row.key]))
+                        ? <a href={String(data[row.key])} target="_blank" rel="noreferrer">{row.value} <ExternalLink size={13} /></a>
+                        : row.value}
+                    </dd>
+                  </div>
+                ))}</dl>
+              </section>
+            ) : null;
+          })}
+          {profile.status === "ready" && Object.keys(data).length === 0 && (
+            <div className="resource-empty"><span className="empty-icon"><UserRound size={18} /></span><span><strong>Your profile details aren’t available</strong><small>Complete profile setup to see your professional information here.</small></span></div>
+          )}
+          </>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function PreferencesPage() {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const preferences = useRemoteData<unknown>("/preferences", refreshKey);
+  const [values, setValues] = useState({ roles: "", locations: "", skills: "", workMode: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (preferences.status !== "ready" || !isRecord(preferences.data)) return;
+    const join = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join(", ") : "";
+    setValues({
+      roles: join(preferences.data.roles),
+      locations: join(preferences.data.locations),
+      skills: join(preferences.data.skills),
+      workMode: typeof preferences.data.remote_preference === "string" ? preferences.data.remote_preference : "",
+    });
+  }, [preferences.data, preferences.status]);
+
+  function splitEntries(value: string) {
+    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const roles = splitEntries(values.roles);
+    const locations = splitEntries(values.locations);
+    const skills = splitEntries(values.skills);
+    if (!roles.length || !locations.length || !skills.length || !values.workMode) {
+      setError("Enter at least one role, location, skill, and work arrangement.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiRequest<unknown>("/preferences", {
+        method: "PUT",
+        body: JSON.stringify({ roles, locations, skills, remote_preference: values.workMode }),
+      });
+      setNotice("Your job preferences have been saved.");
+      setRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="account-feature-page">
+      <RemoteState resource="/preferences" remote={preferences} compact={false} onRetry={preferences.retry} />
+      {preferences.status === "ready" && preferences.data != null && (
+        <form className="preferences-form" onSubmit={(event) => void save(event)}>
+          <div className="onboarding-form-grid">
+            <div className="onboarding-field onboarding-field-wide"><label className="onboarding-field-label" htmlFor="preferences-roles">Roles you’re interested in <span className="required-mark">*</span></label><textarea id="preferences-roles" required rows={3} value={values.roles} placeholder="e.g. Product designer, UX researcher" onChange={(event) => setValues((current) => ({ ...current, roles: event.target.value }))} /><small className="onboarding-field-hint">Separate multiple roles with commas.</small></div>
+            <div className="onboarding-field onboarding-field-wide"><label className="onboarding-field-label" htmlFor="preferences-locations">Preferred locations <span className="required-mark">*</span></label><textarea id="preferences-locations" required rows={3} value={values.locations} placeholder="e.g. Bengaluru, Remote" onChange={(event) => setValues((current) => ({ ...current, locations: event.target.value }))} /><small className="onboarding-field-hint">Separate multiple locations with commas.</small></div>
+            <div className="onboarding-field onboarding-field-wide"><label className="onboarding-field-label" htmlFor="preferences-skills">Skills <span className="required-mark">*</span></label><textarea id="preferences-skills" required rows={3} value={values.skills} placeholder="e.g. Figma, user research, prototyping" onChange={(event) => setValues((current) => ({ ...current, skills: event.target.value }))} /><small className="onboarding-field-hint">Separate skills with commas.</small></div>
+            <div className="onboarding-field"><label className="onboarding-field-label" htmlFor="preferences-work-mode">Preferred work arrangement <span className="required-mark">*</span></label><select id="preferences-work-mode" required value={values.workMode} onChange={(event) => setValues((current) => ({ ...current, workMode: event.target.value }))}><option value="">Choose an arrangement</option><option value="REMOTE">Remote</option><option value="HYBRID">Hybrid</option><option value="ONSITE">On-site</option></select></div>
+          </div>
+          {error && <ErrorBanner message={error} />}
+          {notice && <div className="inline-notice" role="status"><Check size={16} />{notice}</div>}
+          <div className="preferences-form-footer"><span>Your preferences help focus job discovery.</span><button className="button button-primary" type="submit" disabled={busy}>{busy ? "Saving…" : "Save preferences"} <ArrowRight size={15} /></button></div>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -1960,7 +2409,7 @@ function ServiceEditor({ resource, fields, enabled, onSaved }: { resource: strin
         </div>;
       })}</div>
       {error && <ErrorBanner message={error} />}{message && <div className="inline-notice" role="status"><Check size={15} />{message}</div>}
-      <div className="editor-footer"><span>Changes are saved through the connected service.</span><button className="button button-primary" type="submit" disabled={!enabled || busy}>{busy ? "Saving…" : "Save changes"} <ArrowRight size={15} /></button></div>
+      <div className="editor-footer"><span>Changes are saved to your account.</span><button className="button button-primary" type="submit" disabled={!enabled || busy}>{busy ? "Saving…" : "Save changes"} <ArrowRight size={15} /></button></div>
     </form>
   );
 }
@@ -2180,6 +2629,9 @@ function groupLabel(group: PageGroup) {
 }
 
 function errorMessage(reason: unknown): string {
+  if (reason instanceof ApiError) {
+    return reason.requestId ? `${reason.message} (Reference ID: ${reason.requestId})` : reason.message;
+  }
   return reason instanceof Error ? reason.message : "Something went wrong. Please try again.";
 }
 

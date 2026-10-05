@@ -1071,6 +1071,7 @@ function findProfileMatch(
     linkedin_url: ['linkedin', 'linkedin_url', 'linkedin_profile'],
     github_url: ['github', 'github_url', 'github_profile'],
     portfolio_url: ['portfolio', 'portfolio_url', 'website'],
+    professional_summary: ['experience_summary', 'professional_summary', 'summary', 'objective'],
   };
   for (const [key, names] of Object.entries(aliases)) {
     if (names.some((name) => terms.includes(normalize(name)))) {

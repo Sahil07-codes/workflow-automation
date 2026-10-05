@@ -7,6 +7,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -16,6 +17,26 @@ export class ApiError extends Error {
 const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "");
 
 export const isApiConfigured = Boolean(baseUrl);
+
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!baseUrl) return Promise.resolve(false);
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${baseUrl}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .then((response) => response.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
 
 export async function apiRequest<T>(
   path: string,
@@ -38,18 +59,14 @@ export async function apiRequest<T>(
   try {
     response = await fetch(`${baseUrl}${path}`, requestOptions);
   } catch {
-    throw new ApiError("Could not reach the service. Check the connection and try again.");
+    throw new ApiError(
+      `Could not reach the API at ${baseUrl}. Make sure the API is running, then try again.`,
+    );
   }
 
   if (response.status === 401 && path !== "/auth/refresh" && path !== "/auth/login") {
     try {
-      const refreshResponse = await fetch(`${baseUrl}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (refreshResponse.ok) {
+      if (await refreshSession()) {
         response = await fetch(`${baseUrl}${path}`, requestOptions);
       }
     } catch {
@@ -59,14 +76,18 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     let message = `The service returned an error (${response.status}).`;
+    let requestId: string | undefined;
     try {
       const body: unknown = await response.json();
-      if (isRecord(body) && typeof body.message === "string") message = body.message;
-      if (isRecord(body) && typeof body.detail === "string") message = body.detail;
+      if (isRecord(body)) {
+        if (typeof body.message === "string") message = body.message;
+        if (typeof body.detail === "string") message = body.detail;
+        if (typeof body.requestId === "string") requestId = body.requestId;
+      }
     } catch {
       // Non-JSON error responses use the safe status message above.
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, requestId);
   }
 
   if (response.status === 204) return { data: undefined as T, status: response.status };

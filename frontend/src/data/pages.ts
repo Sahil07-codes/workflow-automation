@@ -20,6 +20,7 @@ export const pages: PageDefinition[] = [
   { path: "/auth/google/callback", title: "Connecting your account", description: "We’re checking your sign-in and account status.", group: "auth", resource: "/auth/google/callback" },
   { path: "/signup/complete", title: "Account verification", description: "Your account status is checked before onboarding begins.", group: "auth", resource: "/auth/verification-status" },
   { path: "/login", title: "Welcome back", description: "Sign in to continue your job search.", group: "auth", resource: "/auth/login" },
+  { path: "/forgot-password", title: "Reset your password", description: "Verify your email to choose a new password.", group: "auth", resource: "/auth/password-reset/request" },
   { path: "/onboarding", title: "Your profile setup", description: "Move through each step at your own pace. Your progress is saved by your account.", group: "onboarding", resource: "/onboarding" },
   { path: "/onboarding/contact", title: "Basic details", description: "Tell us the name and location you want associated with your profile.", group: "onboarding", resource: "/profile" },
   { path: "/onboarding/professional", title: "Professional background", description: "Choose the path that best describes you and add your relevant background.", group: "onboarding", resource: "/profile" },

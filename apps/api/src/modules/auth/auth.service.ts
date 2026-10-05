@@ -130,7 +130,12 @@ export class AuthService {
       user.role as JwtPayload['role'],
       sessionId,
     );
-    const refreshToken = await this.tokenService.createRefreshToken(user.id);
+    const refreshToken = await this.tokenService.createRefreshToken(
+      user.id,
+      undefined,
+      undefined,
+      sessionId,
+    );
 
     return {
       access_token: accessToken,
@@ -138,6 +143,45 @@ export class AuthService {
       expires_in: 900,
       token_type: 'Bearer',
     };
+  }
+
+  async requestPasswordReset(email: string, ip?: string) {
+    const user = await this.userRepo.findByEmail(email);
+    if (user?.status === 'ACTIVE') {
+      try {
+        await this.otpService.sendOtp(email, 'EMAIL', ip);
+      } catch (error) {
+        if (
+          error instanceof AppException &&
+          ['OTP_RATE_LIMITED', 'OTP_RESEND_COOLDOWN'].includes(error.code)
+        ) {
+          return {
+            message: 'If this email is associated with an account, a reset code has been sent.',
+          };
+        }
+        throw error;
+      }
+    }
+    return {
+      message: 'If this email is associated with an account, a reset code has been sent.',
+    };
+  }
+
+  async confirmPasswordReset(email: string, code: string, newPassword: string) {
+    await this.otpService.verifyOtp(email, code);
+    const user = await this.userRepo.findByEmail(email);
+    if (!user || user.status !== 'ACTIVE') {
+      throw new AppException(
+        'INVALID_PASSWORD_RESET',
+        'The email or reset code is invalid.',
+        400,
+      );
+    }
+
+    const passwordHash = await this.passwordService.hash(newPassword);
+    await this.userRepo.updatePassword(user.id, passwordHash);
+    await this.tokenService.revokeAllTokens(user.id);
+    return { message: 'Password reset successfully. Sign in with your new password.' };
   }
 
   async refresh(refreshToken: string) {

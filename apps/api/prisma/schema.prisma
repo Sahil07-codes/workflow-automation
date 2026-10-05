@@ -111,16 +111,17 @@ model OtpChallenge {
 }
 
 model RefreshToken {
-  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id    String    @db.Uuid
-  family_id  String    @db.Uuid
-  token_hash String    @unique
-  used_at    DateTime? @db.Timestamptz(6)
-  revoked_at DateTime? @db.Timestamptz(6)
-  expires_at DateTime  @db.Timestamptz(6)
-  user_agent String?
-  ip         String?
-  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String    @db.Uuid
+  family_id        String    @db.Uuid
+  token_hash       String    @unique
+  used_at          DateTime? @db.Timestamptz(6)
+  revoked_at       DateTime? @db.Timestamptz(6)
+  expires_at       DateTime  @db.Timestamptz(6)
+  last_activity_at DateTime  @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  user_agent       String?
+  ip               String?
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
@@ -252,7 +253,7 @@ model JobIntake {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  job  Job?  @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  job  Job? @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   @@unique([userId, url])
   @@index([userId, createdAt])
@@ -261,18 +262,18 @@ model JobIntake {
 }
 
 model Resume {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId           String    @map("user_id") @db.Uuid
-  fileName         String    @map("file_name")
-  contentType      String    @map("content_type")
-  objectKey        String    @unique @map("object_key")
-  sizeBytes        Int       @map("size_bytes")
-  status           String    @default("PROCESSING")
-  extractedTextEnc Bytes?    @map("extracted_text_enc")
-  pageCount        Int?      @map("page_count")
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  fileName         String   @map("file_name")
+  contentType      String   @map("content_type")
+  objectKey        String   @unique @map("object_key")
+  sizeBytes        Int      @map("size_bytes")
+  status           String   @default("PROCESSING")
+  extractedTextEnc Bytes?   @map("extracted_text_enc")
+  pageCount        Int?     @map("page_count")
   error            String?
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

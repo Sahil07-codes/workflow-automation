@@ -1,4 +1,149 @@
-import { assertPublicHostname, isPublicIp, publicLookup } from './day-one.processor';
+import { PrismaClient } from '@prisma/client';
+import {
+  assertPublicHostname,
+  ensureApplicationPreparation,
+  getApplicationQuotaError,
+  isPublicIp,
+  publicLookup,
+} from './day-one.processor';
+
+describe('ensureApplicationPreparation', () => {
+  it('creates an application and queues preparation when the user is entitled', async () => {
+    const application = { id: 'application-id', state: 'PREPARING' };
+    const transaction = {
+      application: { create: jest.fn().mockResolvedValue(application) },
+      applicationEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      application: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      subscription: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          currentPeriodEnd: null,
+          plan: { dailyCap: 5, monthlyQuota: 20 },
+          renewalOption: null,
+        }),
+      },
+      $transaction: jest.fn((callback: (tx: typeof transaction) => unknown) =>
+        callback(transaction),
+      ),
+    } as unknown as PrismaClient;
+    const queue = { add: jest.fn().mockResolvedValue({}) };
+
+    const result = await ensureApplicationPreparation(
+      prisma,
+      queue as never,
+      'user-id',
+      'job-id',
+      'Example Co',
+      'Engineer',
+    );
+
+    expect(result.application).toEqual(application);
+    expect(result.quotaError).toBeNull();
+    expect(transaction.application.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user-id',
+        jobId: 'job-id',
+        companyName: 'Example Co',
+        jobTitle: 'Engineer',
+        matchScore: 0,
+        state: 'PREPARING',
+      },
+    });
+    expect(transaction.applicationEvent.create).toHaveBeenCalledWith({
+      data: {
+        applicationId: 'application-id',
+        eventType: 'APPLICATION_STARTED',
+        payload: { source: 'USER_SUBMITTED_LINK' },
+      },
+    });
+    expect(queue.add).toHaveBeenCalledWith(
+      'prepare_application',
+      { applicationId: 'application-id' },
+      expect.objectContaining({ jobId: 'prepare-application-id' }),
+    );
+  });
+
+  it('does not queue preparation again for an application already past preparation', async () => {
+    const prisma = {
+      application: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'application-id',
+          state: 'AWAITING_APPROVAL',
+        }),
+      },
+    } as unknown as PrismaClient;
+    const queue = { add: jest.fn() };
+
+    const result = await ensureApplicationPreparation(
+      prisma,
+      queue as never,
+      'user-id',
+      'job-id',
+      'Example Co',
+      'Engineer',
+    );
+
+    expect(result.application?.state).toBe('AWAITING_APPROVAL');
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+});
+
+describe('getApplicationQuotaError', () => {
+  it('explains when a user has no subscription', async () => {
+    const prisma = {
+      subscription: { findFirst: jest.fn().mockResolvedValue(null) },
+    } as unknown as PrismaClient;
+
+    await expect(getApplicationQuotaError(prisma, 'user-id')).resolves.toBe(
+      'No active subscription',
+    );
+  });
+
+  it('respects the same daily and monthly caps as the application API', async () => {
+    const prisma = {
+      subscription: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          currentPeriodEnd: null,
+          plan: { dailyCap: 2, monthlyQuota: 10 },
+          renewalOption: { app_increase: 0 },
+        }),
+      },
+      application: {
+        count: jest.fn().mockResolvedValueOnce(2).mockResolvedValueOnce(2),
+      },
+    } as unknown as PrismaClient;
+
+    await expect(getApplicationQuotaError(prisma, 'user-id')).resolves.toBe(
+      'Daily application limit reached',
+    );
+  });
+
+  it('includes renewal quota when checking the monthly cap', async () => {
+    const prisma = {
+      subscription: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          currentPeriodEnd: null,
+          plan: { dailyCap: 5, monthlyQuota: 10 },
+          renewalOption: { app_increase: 2 },
+        }),
+      },
+      application: {
+        count: jest.fn().mockResolvedValueOnce(0).mockResolvedValueOnce(12),
+      },
+    } as unknown as PrismaClient;
+
+    await expect(getApplicationQuotaError(prisma, 'user-id')).resolves.toBe(
+      'Monthly application quota reached',
+    );
+  });
+});
 
 describe('isPublicIp', () => {
   it.each([

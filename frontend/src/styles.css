@@ -376,7 +376,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .approval-actions > .field-hint { width: 100%; }
 .answer-form { display: grid; gap: 9px; margin-top: 14px; padding: 16px; background: white; border: 1px solid var(--border); border-radius: 10px; }
 .answer-form label, .field-row label, .auth-form > label { color: #334155; font-size: 10px; font-weight: 700; }
-.answer-form textarea, .field-row input, .auth-form input:not([type="hidden"]) { width: 100%; min-height: 39px; padding: 10px 11px; color: var(--text); background: white; border: 1px solid #dce3ec; border-radius: 7px; outline: none; font-size: 11px; }
+.answer-form textarea, .field-row input, .auth-form input:not([type="hidden"]):not([type="checkbox"]) { width: 100%; min-height: 39px; padding: 10px 11px; color: var(--text); background: white; border: 1px solid #dce3ec; border-radius: 7px; outline: none; font-size: 11px; }
 .answer-form textarea { resize: vertical; }
 .answer-form textarea:focus, .field-row input:focus, .auth-form input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .1); }
 .answer-form .button { justify-self: start; }
@@ -391,6 +391,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .consent-check { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0; color: #546276; font-size: 10px; line-height: 1.6; }
 .consent-check input { margin-top: 1px; accent-color: var(--brand); }
 .settings-hub { display: grid; gap: 20px; }
+.profile-detail-section, .preferences-form { padding: 24px; background: white; border: 1px solid var(--border); border-radius: 12px; }
+.profile-detail-section dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; margin: 14px 0 0; }
+.profile-detail-row { min-width: 0; padding: 13px 0; border-top: 1px solid #edf0f5; }
+.profile-detail-row dt { margin-bottom: 5px; color: #778498; font-size: 12px; }
+.profile-detail-row dd { margin: 0; color: #263449; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.profile-detail-row dd a { display: inline-flex; align-items: center; gap: 5px; color: var(--brand); }
+.profile-summary-value { white-space: pre-wrap; line-height: 1.65; }
+.profile-skill-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.profile-skill-list li { padding: 5px 9px; color: #42536b; background: #f1f5f9; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.profile-source-note { margin: 0 0 14px; }
+.preferences-form { display: grid; gap: 20px; }
+.preferences-form .onboarding-field > textarea, .preferences-form .onboarding-field > select { display: block; width: 100%; min-height: 46px; padding: 10px 12px; color: var(--text); background: white; border: 1px solid #dce3ec; border-radius: 8px; outline: none; font: inherit; font-size: 14px; }
+.preferences-form .onboarding-field > textarea { resize: vertical; line-height: 1.6; }
+.preferences-form .onboarding-field > textarea:focus, .preferences-form .onboarding-field > select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, .12); }
+.preferences-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 18px; border-top: 1px solid #edf0f5; }
+.preferences-form-footer > span { color: #8290a3; font-size: 12px; }
 .settings-section { padding: 17px; background: white; border: 1px solid var(--border); border-radius: 10px; }
 .settings-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .settings-link-card { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 11px; border: 1px solid #edf0f5; border-radius: 8px; transition: background .15s, border-color .15s; }
@@ -464,7 +480,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .auth-dialog .auth-description { margin-bottom: 23px; font-size: 11px; }
 .auth-dialog .auth-form { gap: 14px; }
 .auth-dialog .field-row { gap: 7px; }
-.auth-dialog .field-row input, .auth-dialog .auth-form input:not([type="hidden"]) { min-height: 44px; font-size: 12px; }
+.auth-dialog .field-row input, .auth-dialog .auth-form input:not([type="hidden"]):not([type="checkbox"]) { min-height: 44px; font-size: 12px; }
 .auth-dialog .auth-form input.otp-input { min-height: 57px; font-size: 23px; }
 .auth-dialog .auth-form .button { min-height: 46px; }
 .auth-dialog .auth-privacy { justify-content: center; margin: 9px 0 0; font-size: 8px; }
@@ -481,6 +497,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .auth-card h1, .not-found h1 { margin: 7px 0 6px; font: 750 24px/1.2 "Manrope", sans-serif; letter-spacing: -.8px; }
 .auth-description { margin: 0 0 21px; color: #7a8799; font-size: 10px; line-height: 1.65; }
 .auth-form { display: grid; gap: 12px; }
+.auth-form .checkbox-field { display: flex; align-items: flex-start; gap: 9px; color: #64748b; font-size: 11px; line-height: 1.55; }
+.auth-form .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 1px 0 0; padding: 0; accent-color: var(--brand); }
+.auth-form .checkbox-field span { flex: 1; }
+.forgot-password-link { align-self: flex-end; margin-top: -3px; color: var(--brand); font-size: 10px; font-weight: 700; }
+.forgot-password-link:hover { text-decoration: underline; }
 .field-row { display: grid; gap: 6px; }
 .field-row input::placeholder { color: #a3adba; }
 .auth-form input.otp-input { min-height: 52px; border-color: #d5dfef; text-align: center; font-size: 21px; font-weight: 700; letter-spacing: 11px; }
@@ -1067,4 +1088,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .subscription-facts, .entitlement-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
   .billing-return-notice { align-items: flex-start; flex-wrap: wrap; }
   .billing-return-notice .button { margin-left: 28px; }
+  .profile-detail-section, .preferences-form { padding: 17px; }
+  .profile-detail-section dl { grid-template-columns: 1fr; }
+  .preferences-form-footer { align-items: flex-start; flex-direction: column; }
+  .preferences-form-footer .button { width: 100%; justify-content: center; }
 }

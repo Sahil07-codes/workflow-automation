@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { JwtPayload } from '@autoapply/shared';
 import { Request } from 'express';
+import { TokenService } from '../../modules/auth/services/token.service';
 
 function accessTokenFromRequest(request: Request): string | null {
   const bearerToken = ExtractJwt.fromAuthHeaderAsBearerToken()(request);
@@ -18,7 +19,10 @@ function accessTokenFromRequest(request: Request): string | null {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
+  constructor(
+    configService: ConfigService,
+    private readonly tokenService: TokenService,
+  ) {
     super({
       jwtFromRequest: accessTokenFromRequest,
       ignoreExpiration: false,
@@ -34,6 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    await this.tokenService.touchSession(payload.sid);
     return {
       id: payload.sub,
       email: payload.email,

@@ -1,10 +1,12 @@
-import { ExceptionFilter, Catch, ArgumentsHost, HttpException } from '@nestjs/common';
+import { ExceptionFilter, Catch, ArgumentsHost, HttpException, Logger } from '@nestjs/common';
 import { AppException } from '../exceptions/app.exception';
 import * as Sentry from '@sentry/node';
 import { v4 as uuid } from 'uuid';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(GlobalExceptionFilter.name);
+
   catch(exception: any, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse();
@@ -36,7 +38,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       statusCode = 400;
       code = 'INVALID_FILE_COUNT';
       message = 'Upload one file at a time.';
-    } else if (exception.code === 'P2002') {
+    } else if (exception?.code === 'P2002') {
       // Prisma unique constraint
       statusCode = 409;
       code = 'RESOURCE_CONFLICT';
@@ -46,6 +48,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const requestId = request.id || uuid();
 
     if (statusCode >= 500) {
+      const reason =
+        exception instanceof Error
+          ? `${exception.name}: ${exception.message}`
+          : 'Unknown server error';
+      this.logger.error(
+        `${request.method} ${request.route?.path ?? 'unmatched'} failed (${requestId}): ${reason}`,
+        exception instanceof Error ? exception.stack : undefined,
+      );
       Sentry.captureException(exception, {
         tags: { requestId, statusCode: String(statusCode) },
         extra: {

@@ -15,6 +15,7 @@ describe('TokenService', () => {
       findByHash: jest.fn(),
       findById: jest.fn(),
       markUsedIfUnused: jest.fn().mockResolvedValue(true),
+      touchActiveSession: jest.fn().mockResolvedValue(true),
       revokeFamily: jest.fn(),
       revokeByUserId: jest.fn(),
     } as any;
@@ -67,6 +68,7 @@ describe('TokenService', () => {
         used_at: null,
         revoked_at: null,
         expires_at: new Date(),
+        last_activity_at: new Date(),
         user_agent: 'test-agent',
         ip: null,
         created_at: new Date(),
@@ -88,7 +90,8 @@ describe('TokenService', () => {
         token_hash: 'hash',
         used_at: null,
         revoked_at: null,
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        expires_at: new Date(Date.now() + 60 * 60 * 1000),
+        last_activity_at: new Date(),
         user_agent: 'agent',
         ip: null,
         created_at: new Date(),
@@ -121,7 +124,8 @@ describe('TokenService', () => {
         token_hash: 'hash',
         used_at: null,
         revoked_at: null,
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        expires_at: new Date(Date.now() + 60 * 60 * 1000),
+        last_activity_at: new Date(),
         user_agent: 'agent',
         ip: null,
         created_at: new Date(),
@@ -154,7 +158,8 @@ describe('TokenService', () => {
         token_hash: 'hash',
         used_at: new Date(), // Already used = reuse attempt
         revoked_at: null,
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        expires_at: new Date(Date.now() + 60 * 60 * 1000),
+        last_activity_at: new Date(),
         user_agent: 'agent',
         ip: null,
         created_at: new Date(),
@@ -179,6 +184,7 @@ describe('TokenService', () => {
         used_at: null,
         revoked_at: null,
         expires_at: new Date(Date.now() - 1000), // Expired
+        last_activity_at: new Date(),
         user_agent: 'agent',
         ip: null,
         created_at: new Date(),
@@ -190,6 +196,50 @@ describe('TokenService', () => {
       await expect(
         service.refreshAccessToken('expired-token'),
       ).rejects.toThrow(AppException);
+    });
+
+    it('should reject refresh after one hour without authenticated activity', async () => {
+      const lastActivity = new Date(Date.now() - 60 * 60 * 1000 - 1000);
+      mockRepo.findByHash.mockResolvedValueOnce({
+        id: 'token-idle',
+        user_id: 'user-123',
+        family_id: 'family-123',
+        token_hash: 'hash',
+        used_at: null,
+        revoked_at: null,
+        expires_at: new Date(Date.now() + 60 * 60 * 1000),
+        last_activity_at: lastActivity,
+        created_at: lastActivity,
+        user: { id: 'user-123', email: 'test@example.com', role: 'USER' },
+      } as any);
+
+      await expect(service.refreshAccessToken('idle-refresh-token')).rejects.toThrow(
+        'Refresh token expired.',
+      );
+      expect(mockRepo.markUsedIfUnused).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('touchSession', () => {
+    it('extends an active session after authenticated activity', async () => {
+      mockRepo.touchActiveSession.mockResolvedValueOnce(true);
+
+      await expect(service.touchSession('family-123')).resolves.toBeUndefined();
+
+      expect(mockRepo.touchActiveSession).toHaveBeenCalledWith(
+        'family-123',
+        expect.any(Date),
+        expect.any(Date),
+        expect.any(Date),
+      );
+    });
+
+    it('rejects a session after the idle timeout', async () => {
+      mockRepo.touchActiveSession.mockResolvedValueOnce(false);
+
+      await expect(service.touchSession('family-123')).rejects.toThrow(
+        'Your session expired due to inactivity.',
+      );
     });
   });
 

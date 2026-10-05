@@ -135,6 +135,13 @@ describe('AuthService', () => {
 
       expect(result.access_token).toBe('access-token');
       expect(result.refresh_token).toBe('refresh-token');
+      const [, , , sessionId] = mockTokenService.createAccessToken.mock.calls[0];
+      expect(mockTokenService.createRefreshToken).toHaveBeenCalledWith(
+        'user-123',
+        undefined,
+        undefined,
+        sessionId,
+      );
     });
 
     it('should throw if user not found', async () => {
@@ -163,6 +170,77 @@ describe('AuthService', () => {
 
       const result = await service.refresh('old-refresh-token');
       expect(result.access_token).toBe('new-access-token');
+    });
+  });
+
+  describe('password reset', () => {
+    it('requests an email code without revealing whether the address has an account', async () => {
+      mockUserRepo.findByEmail.mockResolvedValueOnce({
+        status: 'ACTIVE',
+      } as any);
+      mockOtpService.sendOtp.mockResolvedValueOnce('challenge-id');
+
+      const result = await service.requestPasswordReset(
+        'test@example.com',
+        '127.0.0.1',
+      );
+
+      expect(mockOtpService.sendOtp).toHaveBeenCalledWith(
+        'test@example.com',
+        'EMAIL',
+        '127.0.0.1',
+      );
+      expect(result.message).toContain('If this email is associated');
+    });
+
+    it('returns the same request response without sending a code for an unknown account', async () => {
+      mockUserRepo.findByEmail.mockResolvedValueOnce(null);
+
+      const result = await service.requestPasswordReset('unknown@example.com');
+
+      expect(mockOtpService.sendOtp).not.toHaveBeenCalled();
+      expect(result.message).toContain('If this email is associated');
+    });
+
+    it('updates the password and revokes existing sessions after OTP verification', async () => {
+      mockOtpService.verifyOtp.mockResolvedValueOnce(undefined);
+      mockUserRepo.findByEmail.mockResolvedValueOnce({
+        id: 'user-123',
+        status: 'ACTIVE',
+      } as any);
+      mockPasswordService.hash.mockResolvedValueOnce('new-password-hash');
+      mockUserRepo.updatePassword.mockResolvedValueOnce({} as any);
+      mockTokenService.revokeAllTokens.mockResolvedValueOnce(undefined);
+
+      const result = await service.confirmPasswordReset(
+        'test@example.com',
+        '123456',
+        'new-password',
+      );
+
+      expect(mockOtpService.verifyOtp).toHaveBeenCalledWith(
+        'test@example.com',
+        '123456',
+      );
+      expect(mockUserRepo.updatePassword).toHaveBeenCalledWith(
+        'user-123',
+        'new-password-hash',
+      );
+      expect(mockTokenService.revokeAllTokens).toHaveBeenCalledWith('user-123');
+      expect(result.message).toContain('Password reset successfully');
+    });
+
+    it('does not change the password when the email code is invalid', async () => {
+      mockOtpService.verifyOtp.mockRejectedValueOnce(new Error('Invalid OTP'));
+
+      await expect(
+        service.confirmPasswordReset(
+          'test@example.com',
+          '000000',
+          'new-password',
+        ),
+      ).rejects.toThrow('Invalid OTP');
+      expect(mockUserRepo.updatePassword).not.toHaveBeenCalled();
     });
   });
 });

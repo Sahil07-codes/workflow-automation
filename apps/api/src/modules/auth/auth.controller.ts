@@ -19,9 +19,12 @@ import {
   OtpSendRequestSchema,
   OtpVerifyRequestSchema,
   LoginRequestSchema,
+  PasswordResetConfirmSchema,
+  PasswordResetRequestSchema,
   RefreshRequestSchema,
 } from '@autoapply/shared';
 import { AuthService } from './auth.service';
+import { TokenService } from './services/token.service';
 import { GlobalExceptionFilter } from '@/common/filters/exception.filter';
 
 @Controller('auth')
@@ -70,6 +73,29 @@ export class AuthController {
     const tokens = await this.authService.login(body);
     this.setSessionCookies(response, tokens);
     return this.sessionResponse(tokens, request);
+  }
+
+  @Post('password-reset/request')
+  @Public()
+  @HttpCode(HttpStatus.ACCEPTED)
+  async requestPasswordReset(
+    @Req() request: Request,
+    @Body(new ZodValidationPipe(PasswordResetRequestSchema)) body: any,
+  ) {
+    return this.authService.requestPasswordReset(body.email, request.ip);
+  }
+
+  @Post('password-reset/confirm')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async confirmPasswordReset(
+    @Body(new ZodValidationPipe(PasswordResetConfirmSchema)) body: any,
+  ) {
+    return this.authService.confirmPasswordReset(
+      body.email,
+      body.code,
+      body.new_password,
+    );
   }
 
   @Post('refresh')
@@ -124,7 +150,7 @@ export class AuthController {
     });
     response.cookie('autoapply_refresh', tokens.refresh_token, {
       ...baseOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+      maxAge: TokenService.SESSION_IDLE_TIMEOUT_SECONDS * 1000,
     });
   }
 

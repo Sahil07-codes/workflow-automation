@@ -60,6 +60,20 @@ export const LoginRequestSchema = z.object({
 
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 
+export const PasswordResetRequestSchema = z.object({
+  email: EmailSchema,
+});
+
+export type PasswordResetRequest = z.infer<typeof PasswordResetRequestSchema>;
+
+export const PasswordResetConfirmSchema = z.object({
+  email: EmailSchema,
+  code: z.string().regex(/^\d{6}$/),
+  new_password: z.string().min(8).max(128),
+});
+
+export type PasswordResetConfirm = z.infer<typeof PasswordResetConfirmSchema>;
+
 /**
  * Token pair response
  */

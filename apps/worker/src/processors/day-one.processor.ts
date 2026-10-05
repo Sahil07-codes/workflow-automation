@@ -7,12 +7,14 @@ import {
   GetObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { Job, Worker } from 'bullmq';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Job, Queue, Worker } from 'bullmq';
+import { ApplicationState, Prisma, PrismaClient } from '@prisma/client';
 import { openBuffer, sealBuffer, unwrapDek } from '@autoapply/crypto';
+import { extractResumeProfileData, mergeResumeProfileData } from './resume-profile.extractor';
 
 const JOB_INTAKE_QUEUE = 'job-intake';
 const RESUME_PROCESSING_QUEUE = 'resume-processing';
+const APPLICATION_PREPARE_QUEUE = 'application-prepare';
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 const MAX_RESUME_PAGES = 50;
@@ -51,9 +53,12 @@ export function createDayOneWorkers(
   const bucket = process.env.S3_BUCKET;
   if (!bucket) throw new Error('S3_BUCKET is required by resume processing workers.');
 
+  const applicationPrepareQueue = new Queue(APPLICATION_PREPARE_QUEUE, {
+    connection,
+  });
   const jobIntakeWorker = new Worker<IntakeTask>(
     JOB_INTAKE_QUEUE,
-    (job) => processJobIntake(job, prisma),
+    (job) => processJobIntake(job, prisma, applicationPrepareQueue),
     { connection, concurrency: 3 },
   );
   const resumeWorker = new Worker<ResumeTask>(
@@ -74,19 +79,25 @@ export function createDayOneWorkers(
       await Promise.all([
         jobIntakeWorker.waitUntilReady(),
         resumeWorker.waitUntilReady(),
+        applicationPrepareQueue.waitUntilReady(),
       ]);
     },
     async stop() {
       await Promise.all([
         jobIntakeWorker.close(),
         resumeWorker.close(),
+        applicationPrepareQueue.close(),
         s3.destroy(),
       ]);
     },
   };
 }
 
-async function processJobIntake(job: Job<IntakeTask>, prisma: PrismaClient) {
+async function processJobIntake(
+  job: Job<IntakeTask>,
+  prisma: PrismaClient,
+  applicationPrepareQueue: Queue,
+) {
   const intake = await prisma.jobIntake.findUnique({
     where: { id: job.data.intakeId },
   });
@@ -127,10 +138,32 @@ async function processJobIntake(job: Job<IntakeTask>, prisma: PrismaClient) {
         status: 'OPEN',
       },
     });
+    const applicationResult = await ensureApplicationPreparation(
+      prisma,
+      applicationPrepareQueue,
+      intake.userId,
+      savedJob.id,
+      savedJob.company,
+      savedJob.title,
+    );
+    const application = applicationResult.application;
+    const applicationPath = application
+      ? `/app/applications/${application.id}`
+      : `/app/jobs/${savedJob.id}`;
+    const completionMessage = application
+      ? application.state === 'PREPARING'
+        ? `${listing.title} at ${listing.company} is being prepared for your review. Nothing will be submitted until you approve it.`
+        : `${listing.title} at ${listing.company} already has an application in the ${application.state.toLowerCase().replace(/_/g, ' ')} state.`
+      : `${listing.title} at ${listing.company} was added, but application preparation could not start: ${applicationResult.quotaError}.`;
+
     await prisma.$transaction([
       prisma.jobIntake.update({
         where: { id: intake.id },
-        data: { status: 'COMPLETED', jobId: savedJob.id, error: null },
+        data: {
+          status: 'COMPLETED',
+          jobId: savedJob.id,
+          error: applicationResult.quotaError,
+        },
       }),
       prisma.notification.upsert({
         where: { dedupeKey: `job-intake:${intake.id}:completed` },
@@ -138,11 +171,11 @@ async function processJobIntake(job: Job<IntakeTask>, prisma: PrismaClient) {
           userId: intake.userId,
           kind: 'JOB_INTAKE_COMPLETED',
           title: 'Job link processed',
-          message: `${listing.title} at ${listing.company} is ready to review.`,
-          resourcePath: `/app/jobs/${savedJob.id}`,
+          message: completionMessage,
+          resourcePath: applicationPath,
           dedupeKey: `job-intake:${intake.id}:completed`,
         },
-        update: {},
+        update: { message: completionMessage, resourcePath: applicationPath },
       }),
     ]);
   } catch (error) {
@@ -177,6 +210,118 @@ async function processJobIntake(job: Job<IntakeTask>, prisma: PrismaClient) {
     }
     throw error;
   }
+}
+
+export async function ensureApplicationPreparation(
+  prisma: PrismaClient,
+  queue: Queue,
+  userId: string,
+  jobId: string,
+  companyName: string,
+  jobTitle: string,
+) {
+  let application = await prisma.application.findUnique({
+    where: { userId_jobId: { userId, jobId } },
+  });
+
+  if (!application) {
+    const quotaError = await getApplicationQuotaError(prisma, userId);
+    if (quotaError) return { application: null, quotaError };
+
+    try {
+      application = await prisma.$transaction(async (transaction) => {
+        const created = await transaction.application.create({
+          data: {
+            userId,
+            jobId,
+            companyName,
+            jobTitle,
+            matchScore: 0,
+            state: 'PREPARING',
+          },
+        });
+        await transaction.applicationEvent.create({
+          data: {
+            applicationId: created.id,
+            eventType: 'APPLICATION_STARTED',
+            payload: { source: 'USER_SUBMITTED_LINK' },
+          },
+        });
+        return created;
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== 'P2002'
+      ) {
+        throw error;
+      }
+      application = await prisma.application.findUnique({
+        where: { userId_jobId: { userId, jobId } },
+      });
+      if (!application) throw error;
+    }
+  }
+
+  if (application.state === 'PREPARING') {
+    await queue.add(
+      'prepare_application',
+      { applicationId: application.id },
+      {
+        jobId: `prepare-${application.id}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2_000 },
+        removeOnComplete: 500,
+        removeOnFail: 500,
+      },
+    );
+  }
+
+  return { application, quotaError: null };
+}
+
+export async function getApplicationQuotaError(
+  prisma: PrismaClient,
+  userId: string,
+): Promise<string | null> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+    include: { plan: true, renewalOption: true },
+  });
+  if (!subscription) return 'No active subscription';
+  if (subscription.status !== 'ACTIVE') {
+    return `Subscription status: ${subscription.status}`;
+  }
+  const now = new Date();
+  if (subscription.currentPeriodEnd && now > subscription.currentPeriodEnd) {
+    return 'Subscription period expired';
+  }
+
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const countableStates = {
+    notIn: [ApplicationState.FAILED, ApplicationState.REJECTED],
+  };
+  const [todayCount, monthCount] = await Promise.all([
+    prisma.application.count({
+      where: { userId, state: countableStates, createdAt: { gte: dayStart } },
+    }),
+    prisma.application.count({
+      where: { userId, state: countableStates, createdAt: { gte: monthStart } },
+    }),
+  ]);
+  if (todayCount >= subscription.plan.dailyCap) {
+    return 'Daily application limit reached';
+  }
+
+  const monthlyQuota =
+    subscription.plan.monthlyQuota + (subscription.renewalOption?.app_increase ?? 0);
+  if (monthCount >= monthlyQuota) {
+    return 'Monthly application quota reached';
+  }
+  return null;
 }
 
 async function processResume(
@@ -230,18 +375,42 @@ async function processResume(
       for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
         const page = await document.getPage(pageNumber);
         const content = await page.getTextContent();
-        textParts.push(
-          content.items
-            .map((item) => ('str' in item ? item.str : ''))
-            .join(' '),
-        );
+        const pageLines: string[] = [];
+        let currentLine = '';
+        let previousY: number | undefined;
+        for (const item of content.items) {
+          if (!('str' in item) || !item.str) continue;
+          const y = 'transform' in item && Array.isArray(item.transform)
+            ? item.transform[5]
+            : undefined;
+          if (typeof y === 'number' && previousY !== undefined && Math.abs(y - previousY) > 2) {
+            pageLines.push(currentLine);
+            currentLine = item.str;
+          } else {
+            currentLine = currentLine ? `${currentLine} ${item.str}` : item.str;
+          }
+          if (typeof y === 'number') previousY = y;
+        }
+        if (currentLine) pageLines.push(currentLine);
+        textParts.push(pageLines.join('\n'));
         page.cleanup();
       }
-      const extractedText = textParts.join('\n').replace(/\s+/g, ' ').trim();
+      const extractedText = textParts
+        .join('\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/ *\n */g, '\n')
+        .trim();
       if (!extractedText) {
         throw new Error('No selectable text was found. Scanned-image resumes are not supported yet.');
       }
       const truncated = extractedText.slice(0, MAX_EXTRACTED_CHARACTERS);
+      await saveExtractedProfileData(
+        prisma,
+        resume.userId,
+        dek,
+        wrappedDek.dek_wrapped,
+        extractResumeProfileData(truncated),
+      );
       await prisma.$transaction([
         prisma.resume.update({
           where: { id: resume.id },
@@ -293,6 +462,46 @@ async function processResume(
     }
     throw error;
   }
+}
+
+async function saveExtractedProfileData(
+  prisma: PrismaClient,
+  userId: string,
+  dek: Buffer,
+  wrappedDek: Buffer,
+  extracted: Record<string, unknown>,
+): Promise<void> {
+  if (Object.keys(extracted).length === 0) return;
+
+  await prisma.$transaction(async (transaction) => {
+    const profile = await transaction.profile.findUnique({ where: { user_id: userId } });
+    const existingData: Record<string, unknown> = profile
+      ? JSON.parse(openBuffer(profile.data_enc, dek, userId).toString('utf8')) as Record<string, unknown>
+      : {};
+    const merged = mergeResumeProfileData(existingData, extracted);
+    if (!merged.changed) return;
+
+    const dataEnc = sealBuffer(JSON.stringify(merged.data), dek, userId);
+    const version = profile ? profile.current_version + 1 : 1;
+    if (profile) {
+      await transaction.profile.update({
+        where: { user_id: userId },
+        data: { data_enc: dataEnc, current_version: version },
+      });
+    } else {
+      await transaction.profile.create({
+        data: {
+          user_id: userId,
+          data_enc: dataEnc,
+          dek_wrapped: wrappedDek,
+          current_version: version,
+        },
+      });
+    }
+    await transaction.profileVersion.create({
+      data: { user_id: userId, version, data_enc: dataEnc },
+    });
+  });
 }
 
 interface JobListing {
