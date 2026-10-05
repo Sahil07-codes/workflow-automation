@@ -181,12 +181,13 @@ async function processJobIntake(
   } catch (error) {
     const terminal = job.attemptsMade + 1 >= Number(job.opts.attempts ?? 1);
     if (terminal) {
+      const failureMessage = formatJobIntakeFailure(error);
       await prisma.$transaction([
         prisma.jobIntake.update({
           where: { id: intake.id },
           data: {
             status: 'FAILED',
-            error: 'This link could not be processed. Check that it is a public, active job posting.',
+            error: failureMessage,
           },
         }),
         prisma.notification.upsert({
@@ -195,11 +196,11 @@ async function processJobIntake(
             userId: intake.userId,
             kind: 'JOB_INTAKE_FAILED',
             title: 'Job link needs attention',
-            message: 'We could not process this link. Check that it is a public, active job posting and try again.',
+            message: failureMessage,
             resourcePath: '/app/jobs/submit',
             dedupeKey: `job-intake:${intake.id}:failed`,
           },
-          update: {},
+          update: { message: failureMessage },
         }),
       ]);
     } else {
@@ -210,6 +211,18 @@ async function processJobIntake(
     }
     throw error;
   }
+}
+
+export function formatJobIntakeFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  const status = message.match(/\bHTTP\s+(\d{3})\b/i)?.[1];
+  if (status === '401' || status === '403') {
+    return `The page returned HTTP ${status} to our service. It may require a signed-in account. Make it publicly accessible, then submit its public responder link.`;
+  }
+  if (status === '404' || status === '410') {
+    return `The page returned HTTP ${status} and may have been removed or deactivated. Check the link and try again.`;
+  }
+  return 'Our service could not read this page. Check that the link is public, active, and points directly to a job posting, then try again.';
 }
 
 export async function ensureApplicationPreparation(
@@ -284,6 +297,8 @@ export async function getApplicationQuotaError(
   prisma: PrismaClient,
   userId: string,
 ): Promise<string | null> {
+  if (process.env.SUBSCRIPTION_BYPASS?.toLowerCase() !== 'false') return null;
+
   const subscription = await prisma.subscription.findFirst({
     where: { userId },
     orderBy: { updatedAt: 'desc' },
@@ -517,6 +532,7 @@ async function fetchJobListing(startUrl: string): Promise<JobListing> {
     if (current.protocol !== 'https:' || current.username || current.password || current.port) {
       throw new Error('Only public HTTPS job links are supported.');
     }
+    const googleForm = isGoogleFormsResponderUrl(current);
     const response = await fetchPublicHttps(current);
     if (response.statusCode >= 300 && response.statusCode < 400 && response.location) {
       current = new URL(response.location, current);
@@ -537,19 +553,28 @@ async function fetchJobListing(startUrl: string): Promise<JobListing> {
       decodeEntities(stripTags(match(html, /<main[^>]*>([\s\S]*?)<\/main>/i) ?? ''))
         .replace(/\s+/g, ' ')
         .slice(0, 20_000);
-    if (!title) throw new Error('The job posting did not include a title.');
+    if (!title) throw new Error(googleForm ? 'The Google Form did not include a title.' : 'The job posting did not include a title.');
 
     const company =
-      getMeta(html, ['og:site_name', 'application-name']) ||
+      (googleForm ? 'Google Forms' : getMeta(html, ['og:site_name', 'application-name'])) ||
       cleanHostname(current.hostname);
     return {
       url: current.toString(),
-      title: title.slice(0, 300),
+      title: (googleForm ? title.replace(/\s*-\s*Google Forms\s*$/i, '') : title).slice(0, 300),
       company: company.slice(0, 200),
       description: description.slice(0, 20_000),
     };
   }
   throw new Error('The job site redirected too many times.');
+}
+
+export function isGoogleFormsResponderUrl(url: URL | string): boolean {
+  const candidate = typeof url === 'string' ? new URL(url) : url;
+  return (
+    candidate.protocol === 'https:' &&
+    candidate.hostname.toLowerCase() === 'docs.google.com' &&
+    /^\/forms\/(?:u\/\d+\/)?d\/e\/[^/]+\/viewform\/?$/.test(candidate.pathname)
+  );
 }
 
 function fetchPublicHttps(url: URL): Promise<{

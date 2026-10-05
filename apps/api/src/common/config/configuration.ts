@@ -43,6 +43,7 @@ export interface AppConfig {
   razorpay_key_id: string;
   razorpay_key_secret: string;
   razorpay_webhook_secret: string;
+  subscription_bypass: boolean;
 
   greenhouse_board_tokens: string;
   lever_company_ids: string;
@@ -97,6 +98,7 @@ const ENV_KEY_MAP: Record<keyof AppConfig, string> = {
   razorpay_key_id: 'RAZORPAY_KEY_ID',
   razorpay_key_secret: 'RAZORPAY_KEY_SECRET',
   razorpay_webhook_secret: 'RAZORPAY_WEBHOOK_SECRET',
+  subscription_bypass: 'SUBSCRIPTION_BYPASS',
   greenhouse_board_tokens: 'GREENHOUSE_BOARD_TOKENS',
   lever_company_ids: 'LEVER_COMPANY_IDS',
   ashby_company_ids: 'ASHBY_COMPANY_IDS',
@@ -200,6 +202,7 @@ const validationSchema = Joi.object<AppConfig>({
   razorpay_key_id: Joi.string().required(),
   razorpay_key_secret: Joi.string().required(),
   razorpay_webhook_secret: Joi.string().required(),
+  subscription_bypass: Joi.boolean().default(true),
 
   greenhouse_board_tokens: Joi.string().allow('').default(''),
   lever_company_ids: Joi.string().allow('').default(''),

@@ -1650,7 +1650,7 @@ function JobLinkSubmissionPage() {
           <div>
             <span className="eyebrow">Your roles, your choice</span>
             <h2>Where would you like to apply?</h2>
-            <p>Paste links to job postings you’re interested in. We’ll send them to the service for processing.</p>
+            <p>Paste a public job posting or Google Forms responder link. We’ll prepare supported forms for your review.</p>
           </div>
         </div>
 
@@ -1708,7 +1708,7 @@ function JobLinkSubmissionPage() {
 
       <aside className="job-link-guidance">
         <div><span className="guidance-icon"><ShieldCheck size={18} /></span><div><strong>You stay in control</strong><p>The service can prepare applications from these roles. You’ll review details and approve before anything is submitted.</p></div></div>
-        <div><span className="guidance-icon"><Globe2 size={18} /></span><div><strong>Use the direct job posting</strong><p>Paste the job’s page URL from the employer or job board. Sign-in-only or expired links may not be accessible to the service.</p></div></div>
+        <div><span className="guidance-icon"><Globe2 size={18} /></span><div><strong>Use a public link</strong><p>Public Google Forms responder links are supported; sign-in-only forms and multi-page forms are not. Nothing is submitted until you review and approve it.</p></div></div>
       </aside>
       <section className="data-summary">
         <div className="data-summary-head"><span className="eyebrow">Your submitted job links</span><button className="button button-secondary button-small" type="button" onClick={() => setRefreshKey((key) => key + 1)}>Refresh status</button></div>

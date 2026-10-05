@@ -61,7 +61,9 @@ export class DiscoverySweepScheduler {
     const adapterIds = listAdapters().map((a) => a.id);
 
     if (adapterIds.length === 0) {
-      console.warn('No adapters configured for discovery');
+      console.warn(
+        'No ATS discovery adapters configured. Set GREENHOUSE_BOARD_TOKENS, LEVER_COMPANY_IDS, or ASHBY_COMPANY_IDS in the worker environment to enable supported public-board discovery.',
+      );
       return;
     }
 

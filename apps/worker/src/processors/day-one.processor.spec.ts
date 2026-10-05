@@ -2,10 +2,48 @@ import { PrismaClient } from '@prisma/client';
 import {
   assertPublicHostname,
   ensureApplicationPreparation,
+  formatJobIntakeFailure,
   getApplicationQuotaError,
+  isGoogleFormsResponderUrl,
   isPublicIp,
   publicLookup,
 } from './day-one.processor';
+
+describe('isGoogleFormsResponderUrl', () => {
+  it('accepts public responder links, including the account-prefixed path', () => {
+    expect(isGoogleFormsResponderUrl(
+      'https://docs.google.com/forms/d/e/form-id/viewform?usp=publish-editor',
+    )).toBe(true);
+    expect(isGoogleFormsResponderUrl(
+      'https://docs.google.com/forms/u/0/d/e/form-id/viewform',
+    )).toBe(true);
+  });
+
+  it('rejects editor links and other hosts', () => {
+    expect(isGoogleFormsResponderUrl('https://docs.google.com/forms/d/form-id/edit')).toBe(false);
+    expect(isGoogleFormsResponderUrl('https://example.com/forms/d/e/form-id/viewform')).toBe(false);
+  });
+});
+
+describe('formatJobIntakeFailure', () => {
+  it('explains that unauthorized pages need to be publicly accessible', () => {
+    expect(formatJobIntakeFailure(new Error('Job site returned HTTP 401.'))).toContain(
+      'It may require a signed-in account',
+    );
+  });
+
+  it('explains when the page no longer exists', () => {
+    expect(formatJobIntakeFailure(new Error('Job site returned HTTP 404.'))).toContain(
+      'may have been removed or deactivated',
+    );
+  });
+
+  it('does not expose low-level errors to users', () => {
+    expect(formatJobIntakeFailure(new Error('socket hang up'))).toContain(
+      'could not read this page',
+    );
+  });
+});
 
 describe('ensureApplicationPreparation', () => {
   it('creates an application and queues preparation when the user is entitled', async () => {
@@ -94,7 +132,31 @@ describe('ensureApplicationPreparation', () => {
 });
 
 describe('getApplicationQuotaError', () => {
-  it('explains when a user has no subscription', async () => {
+  const originalBypass = process.env.SUBSCRIPTION_BYPASS;
+
+  beforeEach(() => {
+    process.env.SUBSCRIPTION_BYPASS = 'false';
+  });
+
+  afterAll(() => {
+    if (originalBypass === undefined) delete process.env.SUBSCRIPTION_BYPASS;
+    else process.env.SUBSCRIPTION_BYPASS = originalBypass;
+  });
+
+  it('bypasses subscription checks by default for all accounts', async () => {
+    const original = process.env.SUBSCRIPTION_BYPASS;
+    delete process.env.SUBSCRIPTION_BYPASS;
+    const prisma = {
+      subscription: { findFirst: jest.fn() },
+    } as unknown as PrismaClient;
+
+    await expect(getApplicationQuotaError(prisma, 'user-id')).resolves.toBeNull();
+    expect(prisma.subscription.findFirst).not.toHaveBeenCalled();
+    if (original === undefined) delete process.env.SUBSCRIPTION_BYPASS;
+    else process.env.SUBSCRIPTION_BYPASS = original;
+  });
+
+  it('explains when a user has no subscription after bypass is disabled', async () => {
     const prisma = {
       subscription: { findFirst: jest.fn().mockResolvedValue(null) },
     } as unknown as PrismaClient;

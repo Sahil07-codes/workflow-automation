@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApplicationState } from '@prisma/client';
 import { PrismaService } from '../../../database/prisma.service';
 import { SubscriptionRepository } from '../repositories/subscription.repository';
@@ -8,9 +9,14 @@ export class EntitlementService {
   constructor(
     private readonly subRepo: SubscriptionRepository,
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
 
   async canSubmitApplication(userId: string): Promise<{ allowed: boolean; reason?: string }> {
+    if (this.config.get<boolean>('subscription_bypass', true)) {
+      return { allowed: true };
+    }
+
     const subscription = await this.subRepo.findByUserId(userId);
     if (!subscription) return { allowed: false, reason: 'No active subscription' };
     if (subscription.status !== 'ACTIVE') {

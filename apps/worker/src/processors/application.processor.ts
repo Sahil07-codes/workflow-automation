@@ -10,7 +10,7 @@ import {
 import { openBuffer, generateDek, sealBuffer, unwrapDek, wrapDek } from '@autoapply/crypto';
 import { Job, Queue, Worker } from 'bullmq';
 import { chromium, Page } from 'playwright';
-import { assertPublicHostname, isPublicIp } from './day-one.processor';
+import { assertPublicHostname, isGoogleFormsResponderUrl, isPublicIp } from './day-one.processor';
 
 const PREPARE_QUEUE = 'application-prepare';
 const SUBMIT_QUEUE = 'application-submit';
@@ -152,7 +152,7 @@ async function prepareApplication(
   let page: Page | undefined;
   try {
     page = await openApplicationPage(application.job.applyUrl);
-    const schema = await readFormSchema(page, application.job.source);
+    const schema = await readFormSchema(page, application.job.source, application.job.applyUrl);
     await prisma.formDetectionCache.upsert({
       where: { jobId: application.jobId },
       create: {
@@ -255,7 +255,9 @@ async function prepareApplication(
         application.id,
         'FAILED',
         'Application preparation failed',
-        `We could not prepare ${application.jobTitle} at ${application.companyName}. Review the application for details.`,
+        code === 'IP_BLOCKED'
+          ? `${application.jobTitle} at ${application.companyName} could not be prepared because the employer site denied access to AutoApply's automated browser. Apply directly on the employer's website.`
+          : `We could not prepare ${application.jobTitle} at ${application.companyName}. Review the application for details.`,
       );
     }
     throw error;
@@ -311,7 +313,7 @@ async function submitApplication(
     const payload = JSON.parse(plaintext) as Record<string, unknown>;
     const cachedSchema = parseSchema(application.formSchema);
     page = await openApplicationPage(application.job.applyUrl);
-    const currentSchema = await readFormSchema(page, application.job.source);
+    const currentSchema = await readFormSchema(page, application.job.source, application.job.applyUrl);
     reviewSchema = currentSchema;
     if (schemaSignature(currentSchema) !== schemaSignature(cachedSchema)) {
       const changedFields = fieldsForUserReview(currentSchema);
@@ -366,7 +368,7 @@ async function submitApplication(
 
     await page.waitForTimeout(1500);
     const resultText = (await page.locator('body').innerText()).toLowerCase();
-    const success = /application (has been )?(received|submitted)|thank you for applying|successfully submitted|application complete/.test(resultText);
+    const success = /application (has been )?(received|submitted)|thank you for applying|successfully submitted|application complete|your response has been recorded/.test(resultText);
     if (!success) {
       const hasValidationError =
         (await page.locator('[aria-invalid="true"], .error, .alert-danger, [role="alert"]').count()) > 0;
@@ -805,6 +807,7 @@ async function openApplicationPage(applyUrl: string): Promise<Page> {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
     });
+    page.setDefaultTimeout(5000);
     if (blockedRequestHost) {
       throw new ApplicationProcessingError(
         'PRIVATE_RESOURCE_BLOCKED',
@@ -815,7 +818,13 @@ async function openApplicationPage(applyUrl: string): Promise<Page> {
     if (!response?.ok()) {
       const status = response?.status();
       if (status === 401 || status === 403) {
-        throw new ApplicationProcessingError('IP_BLOCKED', `Employer site responded with HTTP ${status}`);
+        const guidance = status === 401
+          ? 'The employer site requires authentication that is not available to AutoApply.'
+          : 'The employer site denied access to AutoApply’s automated browser.';
+        throw new ApplicationProcessingError(
+          'IP_BLOCKED',
+          `${guidance} (HTTP ${status}) Apply directly on the employer’s website; this access restriction cannot be bypassed here.`,
+        );
       }
       throw new ApplicationProcessingError(
         status === 429 || (status !== undefined && status >= 500)
@@ -828,9 +837,9 @@ async function openApplicationPage(applyUrl: string): Promise<Page> {
     await page.waitForTimeout(500);
     await page.locator('input:not([type="hidden"]), select, textarea')
       .first()
-      .waitFor({ state: 'attached', timeout: 10000 })
+      .waitFor({ state: 'visible', timeout: 5000 })
       .catch(() => undefined);
-    detectPageBlock((await page.content()).toLowerCase());
+    detectPageBlock((await page.locator('body').innerText()).toLowerCase());
     return page;
   } catch (error) {
     await context.close();
@@ -929,12 +938,100 @@ function storageFailure(error: unknown): ApplicationProcessingError {
   return new ApplicationProcessingError('SCREENSHOT_STORAGE_FAILED', message, transient);
 }
 
-async function readFormSchema(page: Page, source: string): Promise<FormSchema> {
+async function readFormSchema(page: Page, source: string, applyUrl: string): Promise<FormSchema> {
+  if (isGoogleFormsResponderUrl(applyUrl)) {
+    const fields = await page.locator('[role="listitem"]').evaluateAll((elements) => {
+      const output: FormField[] = [];
+      for (const element of elements) {
+        const question = element as HTMLElement;
+        if (
+          question.getClientRects().length === 0 ||
+          getComputedStyle(question).visibility === 'hidden' ||
+          question.closest('[aria-hidden="true"]')
+        ) continue;
+        const control = question.querySelector<HTMLElement>(
+          '[role="textbox"], input:not([type="hidden"]), textarea, [role="listbox"], [role="radio"], [role="checkbox"], [role="button"][aria-label*="Add file"]',
+        );
+        const heading = question.querySelector<HTMLElement>('[role="heading"]');
+        const label = (heading?.innerText || question.getAttribute('aria-label') || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!control || !label) continue;
+
+        const controlRole = control.getAttribute('role');
+        const nativeType = control instanceof HTMLInputElement ? control.type.toLowerCase() : '';
+        const type = controlRole === 'textbox' || control instanceof HTMLTextAreaElement ||
+          (control instanceof HTMLInputElement && ['text', 'email', 'tel', 'url', 'number'].includes(nativeType))
+          ? 'google-textbox'
+          : controlRole === 'listbox'
+            ? 'google-dropdown'
+            : controlRole === 'radio'
+              ? 'google-radio'
+              : controlRole === 'checkbox'
+                ? 'google-checkbox'
+                : 'file';
+        const index = output.length;
+        const id = `google-question-${index}`;
+        question.setAttribute('data-autoapply-google-question', id);
+        const optionRole = type === 'google-radio' ? 'radio' : type === 'google-checkbox' ? 'checkbox' : 'option';
+        const options = Array.from(question.querySelectorAll<HTMLElement>(`[role="${optionRole}"]`))
+          .map((option) => {
+            const optionLabel = (option.getAttribute('aria-label') || option.innerText || '').trim();
+            return optionLabel
+              ? { label: optionLabel, value: option.getAttribute('data-value') || optionLabel }
+              : null;
+          })
+          .filter((option): option is FormOption => option !== null);
+        output.push({
+          id,
+          name: `google_form_${index}_${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`,
+          label,
+          type,
+          required: question.querySelector('[aria-required="true"]') !== null,
+          placeholder: control.getAttribute('aria-label') || undefined,
+          options,
+        });
+      }
+      return output;
+    });
+
+    for (const field of fields) {
+      if (field.type !== 'google-dropdown') continue;
+      const question = page.locator(`[data-autoapply-google-question="${field.id}"]`);
+      await question.getByRole('listbox').click();
+      field.options = await page.locator('[role="option"]').evaluateAll((options) =>
+        options.map((option) => {
+          const item = option as HTMLElement;
+          const label = (item.getAttribute('aria-label') || item.innerText || '').trim();
+          return label
+            ? { label, value: item.getAttribute('data-value') || label }
+            : null;
+        }).filter((option): option is FormOption => option !== null),
+      );
+      await page.keyboard.press('Escape');
+    }
+    if (await page.getByRole('button', { name: /^next$/i }).count() > 0) {
+      throw new ApplicationProcessingError(
+        'MULTI_PAGE_FORM_UNSUPPORTED',
+        'This Google Form has multiple pages, which are not supported yet.',
+      );
+    }
+    if (fields.length === 0) {
+      throw new ApplicationProcessingError('FORM_NOT_FOUND', 'No supported Google Forms questions were found');
+    }
+    return { fields, source, detectedAt: new Date().toISOString() };
+  }
+
   const fields = await page.locator('input, select, textarea').evaluateAll((elements) => {
     const seenRadioNames = new Set<string>();
     const output: FormField[] = [];
     for (const element of elements) {
       const control = element as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      if (
+        control.getClientRects().length === 0 ||
+        getComputedStyle(control).visibility === 'hidden' ||
+        control.closest('[aria-hidden="true"]')
+      ) continue;
       const type = control instanceof HTMLInputElement
         ? (control.type || 'text').toLowerCase()
         : control instanceof HTMLSelectElement
@@ -1110,7 +1207,7 @@ function findAnswer(
 function coerceFormValue(field: FormField, value: unknown): unknown {
   if (field.type === 'checkbox') return value === true || value === 'true' || value === 'yes';
   const stringValue = String(value);
-  if (field.type === 'select' || field.type === 'radio') {
+  if (['select', 'radio', 'google-radio', 'google-checkbox', 'google-dropdown'].includes(field.type)) {
     const option = field.options.find(
       (candidate) =>
         normalize(candidate.value) === normalize(stringValue) ||
@@ -1159,6 +1256,30 @@ async function fillForm(
       );
     }
     const escapedName = field.name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    if (field.type.startsWith('google-')) {
+      const question = page.locator(`[data-autoapply-google-question="${field.id}"]`);
+      if (!(await question.isVisible())) continue;
+      if (field.type === 'google-textbox') {
+        await question.getByRole('textbox').fill(String(value));
+      } else if (field.type === 'google-radio' || field.type === 'google-checkbox') {
+        const option = field.options.find((candidate) => candidate.value === String(value));
+        if (!option) {
+          throw new ApplicationProcessingError('FORM_CHANGED', `An option for ${field.label} is no longer present`);
+        }
+        await question.getByRole(field.type === 'google-radio' ? 'radio' : 'checkbox', {
+          name: option.label,
+          exact: true,
+        }).check();
+      } else if (field.type === 'google-dropdown') {
+        const option = field.options.find((candidate) => candidate.value === String(value));
+        if (!option) {
+          throw new ApplicationProcessingError('FORM_CHANGED', `An option for ${field.label} is no longer present`);
+        }
+        await question.getByRole('listbox').click();
+        await page.getByRole('option', { name: option.label, exact: true }).click();
+      }
+      continue;
+    }
     const locator = page.locator(`[name="${escapedName}"]`).first();
     if ((await locator.count()) === 0) {
       throw new ApplicationProcessingError(
@@ -1166,6 +1287,7 @@ async function fillForm(
         `Form field ${field.name} is no longer present`,
       );
     }
+    if (!(await locator.isVisible())) continue;
     if (field.type === 'checkbox') {
       if (value) await locator.check();
       else await locator.uncheck();
